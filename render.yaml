@@ -1,0 +1,44 @@
+services:
+  - type: worker
+    name: solana-smart-money-tracker
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_USER_ID
+        sync: false
+      - key: CHECK_INTERVAL_HOURS
+        value: 3
+      - key: MIN_TRANSACTION_USD
+        value: 2000
+      - key: BIG_ORDER_THRESHOLD
+        value: 10000
+      - key: WALLET_AGE_THRESHOLD_HOURS
+        value: 48
+      - key: WALLET_INACTIVITY_DAYS
+        value: 14
+      - key: DATABASE_PATH
+        value: /var/data/tracker.db
+      - key: ENABLE_MULTI_WALLET_DETECTION
+        value: true
+      - key: ENABLE_NEW_TOKEN_DETECTION
+        value: true
+      - key: ENABLE_CYCLE_LOGS
+        value: true
+      - key: AGGREGATION_PERIOD_HOURS
+        value: 3
+      - key: MAX_RETRIES
+        value: 3
+      - key: RETRY_DELAY_MS
+        value: 5000
+    
+    disk:
+      name: tracker-data
+      mountPath: /var/data
+      sizeGB: 1
