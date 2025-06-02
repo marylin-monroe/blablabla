@@ -4,7 +4,7 @@
   "description": "Advanced Telegram bot for tracking smart money movements and detecting sleeping insiders on Solana",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc",
+    "build": "npm rebuild better-sqlite3 && tsc",
     "start": "node dist/main.js",
     "dev": "ts-node-dev --respawn --transpile-only src/main.ts",
     "test": "jest",
@@ -27,7 +27,6 @@
     "dotenv": "^16.4.5",
     "node-cron": "^3.0.3",
     "node-telegram-bot-api": "^0.63.0",
-    "p-queue": "^8.0.1",
     "sqlite3": "^5.1.7",
     "winston": "^3.13.0"
   },
