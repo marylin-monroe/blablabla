@@ -332,7 +332,8 @@ export class SolanaMonitor {
     return dexMap[source] || 'Jupiter';
   }
 
-  private async getWalletInfo(address: string): Promise<WalletInfo> {
+  // ПУБЛИЧНЫЕ МЕТОДЫ для использования в WebhookServer
+  public async getWalletInfo(address: string): Promise<WalletInfo> {
     try {
       const cachedInfo = await this.database.getWalletInfo(address);
       if (cachedInfo) {
@@ -377,7 +378,7 @@ export class SolanaMonitor {
     }
   }
 
-  private async getTradingHistory(address: string): Promise<TradingHistory> {
+  public async getTradingHistory(address: string): Promise<TradingHistory> {
     try {
       // Получаем историю торгов для анализа паттернов
       const transactions = await this.database.getWalletTransactions(address);
@@ -430,7 +431,7 @@ export class SolanaMonitor {
     }
   }
 
-  private calculateSuspicionScore(walletInfo: WalletInfo, swap: any): number {
+  public calculateSuspicionScore(walletInfo: WalletInfo, swap: any): number {
     let score = 0;
     const history = walletInfo.tradingHistory;
     
@@ -464,7 +465,7 @@ export class SolanaMonitor {
     return Math.min(score, 100);
   }
 
-  private getInsiderFlags(walletInfo: WalletInfo, swap: any): string[] {
+  public getInsiderFlags(walletInfo: WalletInfo, swap: any): string[] {
     const flags: string[] = [];
     const history = walletInfo.tradingHistory;
     
@@ -493,7 +494,7 @@ export class SolanaMonitor {
     return flags;
   }
 
-  private async analyzeForInsider(swap: TokenSwap, walletInfo: WalletInfo): Promise<InsiderAlert | null> {
+  public async analyzeForInsider(swap: TokenSwap, walletInfo: WalletInfo): Promise<InsiderAlert | null> {
     const suspicionScore = walletInfo.suspicionScore || 0;
     
     if (suspicionScore < 15) return null;
@@ -513,7 +514,7 @@ export class SolanaMonitor {
     };
   }
 
-  private async getTokenInfo(address: string): Promise<any> {
+  public async getTokenInfo(address: string): Promise<any> {
     try {
       const response = await axios.get(
         `https://api.helius.xyz/v0/token-metadata?api-key=${this.heliusApiKey}&mint=${address}`
