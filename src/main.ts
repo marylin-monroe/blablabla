@@ -1,4 +1,4 @@
-// src/main.ts - ОБНОВЛЕННАЯ ВЕРСИЯ для Worker Service с Smart Money Flow Analysis
+// src/main.ts - ОБНОВЛЕННАЯ ВЕРСИЯ для QuickNode
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -8,7 +8,7 @@ import { SmartMoneyFlowAnalyzer } from './services/SmartMoneyFlowAnalyzer';
 import { SmartWalletDiscovery } from './services/SmartWalletDiscovery';
 import { FamilyWalletDetector } from './services/FamilyWalletDetector';
 import { WebhookServer } from './services/WebhookServer';
-import { HeliusWebhookManager } from './services/HeliusWebhookManager';
+import { QuickNodeWebhookManager } from './services/QuickNodeWebhookManager';
 import { Logger } from './utils/Logger';
 
 // Load environment variables
@@ -23,7 +23,7 @@ class SmartMoneyBotRunner {
   private walletDiscovery: SmartWalletDiscovery;
   private familyDetector: FamilyWalletDetector;
   private webhookServer: WebhookServer;
-  private webhookManager: HeliusWebhookManager;
+  private webhookManager: QuickNodeWebhookManager; 
   private logger: Logger;
   
   private isRunning: boolean = false;
@@ -54,17 +54,18 @@ class SmartMoneyBotRunner {
       this.database, 
       this.telegramNotifier, 
       this.solanaMonitor,
-      this.smDatabase // Добавляем SmartMoneyDatabase для real-time обработки
+      this.smDatabase
     );
     
-    this.webhookManager = new HeliusWebhookManager();
+    this.webhookManager = new QuickNodeWebhookManager();
 
     this.logger.info('✅ Smart Money Bot services initialized successfully');
   }
 
   private validateEnvironment(): void {
     const requiredVars = [
-      'HELIUS_API_KEY',
+      'QUICKNODE_HTTP_URL',
+      'QUICKNODE_API_KEY',
       'TELEGRAM_BOT_TOKEN',
       'TELEGRAM_USER_ID'
     ];
@@ -94,8 +95,8 @@ class SmartMoneyBotRunner {
       await this.webhookServer.start();
       this.logger.info('✅ Webhook server started');
 
-      // Create Helius webhook for DEX monitoring
-      await this.setupHeliusWebhook();
+      // Create QuickNode webhook for DEX monitoring
+      await this.setupQuickNodeWebhook();
 
       // Send startup notification
       await this.sendStartupNotification();
@@ -124,7 +125,7 @@ class SmartMoneyBotRunner {
     }
   }
 
-  private async setupHeliusWebhook(): Promise<void> {
+  private async setupQuickNodeWebhook(): Promise<void> {
     try {
       let webhookURL: string;
       
@@ -135,20 +136,15 @@ class SmartMoneyBotRunner {
         webhookURL = process.env.WEBHOOK_URL || 'http://localhost:3000/webhook';
       }
 
-      const webhookConfig = {
-        webhookURL,
-        transactionTypes: ['SWAP'],
-        accountAddresses: HeliusWebhookManager.getDEXProgramAddresses(),
-        webhookType: 'enhanced' as const,
-      };
-
-      this.webhookId = await this.webhookManager.createDEXMonitoringWebhook(webhookConfig);
+      this.webhookId = await this.webhookManager.createDEXMonitoringStream(webhookURL);
       
       this.logger.info('🎯 Smart Money DEX monitoring webhook created');
       this.logger.info(`📡 Webhook URL: ${webhookURL}`);
     } catch (error) {
-      this.logger.error('❌ Failed to setup Helius webhook:', error);
-      throw error;
+      this.logger.error('❌ Failed to setup QuickNode webhook:', error);
+      
+      // Не выбрасываем ошибку - продолжаем работу в polling режиме
+      this.logger.info('💡 Continuing in polling mode without real-time streams');
     }
   }
 
@@ -419,11 +415,11 @@ class SmartMoneyBotRunner {
       await this.webhookServer.stop();
     }
     
-    // Удаляем Helius webhook
-    if (this.webhookId) {
+    // Удаляем QuickNode webhook
+    if (this.webhookId && this.webhookId !== 'polling-mode') {
       try {
-        await this.webhookManager.deleteWebhook(this.webhookId);
-        this.logger.info('✅ Helius webhook deleted');
+        await this.webhookManager.deleteStream(this.webhookId);
+        this.logger.info('✅ QuickNode webhook deleted');
       } catch (error) {
         this.logger.error('❌ Error deleting webhook:', error);
       }
