@@ -39,7 +39,9 @@ export class QuickNodeWebhookManager {
 
   async createDEXMonitoringStream(webhookUrl: string): Promise<string> {
     try {
-      this.logger.info('🔗 Creating QuickNode DEX monitoring stream...');
+      // Временно отключаем streams - сразу переходим к polling
+    this.logger.info('💡 Using polling mode (streams disabled)');
+    return 'polling-mode';
 
       // DEX программы на Solana
       const dexPrograms = [
