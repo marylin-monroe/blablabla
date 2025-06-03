@@ -20,13 +20,16 @@
     "node-cron": "^3.0.3",
     "node-telegram-bot-api": "^0.63.0",
     "sqlite3": "^5.1.7",
-    "winston": "^3.13.0",
+    "winston": "^3.13.0"
+  },
+  "devDependencies": {
     "@types/better-sqlite3": "^7.6.9",
     "@types/body-parser": "^1.19.2",
     "@types/express": "^4.17.17",
     "@types/node": "^20.12.0",
     "@types/node-cron": "^3.0.11",
     "@types/node-telegram-bot-api": "^0.64.0",
+    "ts-node-dev": "^2.0.0",
     "typescript": "^5.4.0"
   },
   "engines": {

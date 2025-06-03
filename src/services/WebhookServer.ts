@@ -1,290 +1,606 @@
-// src/services/WebhookServer.ts
-import express, { Request, Response } from 'express';
-import bodyParser from 'body-parser';
+// src/services/WebhookServer.ts - ИСПРАВЛЕНО для Background Worker
+import express from 'express';
 import { Database } from './Database';
+import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { TelegramNotifier } from './TelegramNotifier';
 import { SolanaMonitor } from './SolanaMonitor';
 import { Logger } from '../utils/Logger';
-import { TokenSwap } from '../types';
+import { SmartMoneySwap, SmartMoneyWallet, TokenSwap } from '../types';
 
-export interface HeliusWebhookPayload {
-  accountData: any[];
-  description: string;
-  events: any;
-  fee: number;
+interface HeliusWebhookPayload {
+  type: string;
   feePayer: string;
-  instructions: any[];
-  nativeTransfers: any[];
   signature: string;
   slot: number;
-  source: string;
   timestamp: number;
-  tokenTransfers: any[];
-  transactionError: any;
-  type: string;
+  tokenTransfers?: Array<{
+    fromUserAccount: string;
+    toUserAccount: string;
+    fromTokenAccount: string;
+    toTokenAccount: string;
+    tokenAmount: number;
+    mint: string;
+  }>;
+  nativeTransfers?: Array<{
+    fromUserAccount: string;
+    toUserAccount: string;
+    amount: number;
+  }>;
+  events?: {
+    swap?: Array<{
+      nativeInput?: {
+        account: string;
+        amount: string;
+      };
+      nativeOutput?: {
+        account: string;
+        amount: string;
+      };
+      tokenInputs?: Array<{
+        userAccount: string;
+        tokenAccount: string;
+        mint: string;
+        rawTokenAmount: {
+          tokenAmount: string;
+          decimals: number;
+        };
+      }>;
+      tokenOutputs?: Array<{
+        userAccount: string;
+        tokenAccount: string;
+        mint: string;
+        rawTokenAmount: {
+          tokenAmount: string;
+          decimals: number;
+        };
+      }>;
+    }>;
+  };
 }
 
 export class WebhookServer {
   private app: express.Application;
+  private server: any;
   private database: Database;
+  private smDatabase: SmartMoneyDatabase;
   private telegramNotifier: TelegramNotifier;
   private solanaMonitor: SolanaMonitor;
   private logger: Logger;
   private port: number;
 
   constructor(
-    database: Database, 
+    database: Database,
     telegramNotifier: TelegramNotifier,
-    solanaMonitor: SolanaMonitor
+    solanaMonitor: SolanaMonitor,
+    smDatabase: SmartMoneyDatabase
   ) {
-    this.app = express();
     this.database = database;
+    this.smDatabase = smDatabase;
     this.telegramNotifier = telegramNotifier;
     this.solanaMonitor = solanaMonitor;
     this.logger = Logger.getInstance();
-    this.port = parseInt(process.env.WEBHOOK_PORT || '3000');
+    this.port = parseInt(process.env.PORT || '3000');
 
+    this.app = express();
     this.setupMiddleware();
     this.setupRoutes();
   }
 
   private setupMiddleware(): void {
-    this.app.use(bodyParser.json({ limit: '10mb' }));
-    this.app.use(bodyParser.urlencoded({ extended: true }));
-    
-    // Logging middleware
-    this.app.use((_req, _res, next) => {
-      this.logger.info(`${_req.method} ${_req.path}`);
+    // Увеличиваем лимит для webhook payload
+    this.app.use(express.json({ limit: '10mb' }));
+    this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+    // CORS для development
+    this.app.use((req, res, next) => {
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+      next();
+    });
+
+    // Request logging
+    this.app.use((req, res, next) => {
+      this.logger.debug(`${req.method} ${req.path} - ${req.ip}`);
       next();
     });
   }
 
   private setupRoutes(): void {
-    // Health check endpoint
-    this.app.get('/health', (_req: Request, res: Response) => {
-      res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+    // Health check endpoint для Background Worker
+    this.app.get('/health', (req, res) => {
+      res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        service: 'Smart Money Tracker Background Worker',
+        version: '3.0.0',
+        uptime: process.uptime()
+      });
     });
 
-    // Main webhook endpoint for Helius
-    this.app.post('/webhook', async (req: Request, res: Response): Promise<void> => {
+    // Main webhook endpoint для Helius
+    this.app.post('/webhook', async (req, res) => {
       try {
-        const webhookData = req.body as HeliusWebhookPayload[];
+        const webhookData: HeliusWebhookPayload[] = Array.isArray(req.body) ? req.body : [req.body];
         
-        if (!Array.isArray(webhookData)) {
-          this.logger.error('Invalid webhook payload format');
-          res.status(400).json({ error: 'Invalid payload format' });
-          return;
+        this.logger.info(`📡 Received webhook with ${webhookData.length} transactions`);
+
+        // Обрабатываем каждую транзакцию
+        for (const txData of webhookData) {
+          await this.processWebhookTransaction(txData);
         }
 
-        this.logger.info(`Received ${webhookData.length} transactions from Helius webhook`);
-
-        // Process each transaction
-        for (const transaction of webhookData) {
-          await this.processWebhookTransaction(transaction);
-        }
-
-        res.status(200).json({ 
-          status: 'success', 
-          processed: webhookData.length,
-          timestamp: new Date().toISOString()
-        });
-
+        res.status(200).json({ success: true, processed: webhookData.length });
       } catch (error) {
-        this.logger.error('Error processing webhook:', error);
+        this.logger.error('❌ Error processing webhook:', error as Error);
         res.status(500).json({ error: 'Internal server error' });
       }
     });
 
-    // Test endpoint
-    this.app.post('/webhook/test', (req: Request, res: Response) => {
-      this.logger.info('Webhook test received:', req.body);
-      res.status(200).json({ status: 'test received' });
+    // Test endpoint для проверки работы
+    this.app.post('/test', async (req, res) => {
+      try {
+        this.logger.info('🧪 Test endpoint called');
+        
+        await this.telegramNotifier.sendCycleLog(
+          '🧪 <b>Test notification</b>\n' +
+          `Background Worker is running correctly\n` +
+          `Timestamp: <code>${new Date().toISOString()}</code>`
+        );
+
+        res.json({ 
+          success: true, 
+          message: 'Test notification sent',
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        this.logger.error('❌ Error in test endpoint:', error as Error);
+        res.status(500).json({ error: (error as Error).message });
+      }
+    });
+
+    // Statistics endpoint
+    this.app.get('/stats', async (req, res) => {
+      try {
+        const dbStats = await this.smDatabase.getWalletStats();
+        const recentTransactions = await this.database.getRecentTransactions(24);
+        
+        res.json({
+          smartMoneyWallets: dbStats,
+          recentActivity: {
+            last24h: recentTransactions.length,
+            lastUpdate: new Date().toISOString()
+          },
+          service: {
+            uptime: process.uptime(),
+            memory: process.memoryUsage(),
+            version: '3.0.0'
+          }
+        });
+      } catch (error) {
+        this.logger.error('❌ Error getting stats:', error as Error);
+        res.status(500).json({ error: 'Failed to get statistics' });
+      }
+    });
+
+    // 404 handler
+    this.app.use('*', (req, res) => {
+      res.status(404).json({ error: 'Endpoint not found' });
     });
   }
 
-  private async processWebhookTransaction(transaction: HeliusWebhookPayload): Promise<void> {
+  private async processWebhookTransaction(txData: HeliusWebhookPayload): Promise<void> {
     try {
-      // Проверяем что это SWAP транзакция
-      if (!this.isSwapTransaction(transaction)) {
+      // Проверяем Token Name Alerts
+      await this.checkTokenNameAlerts(txData);
+
+      // Проверяем, что это swap транзакция
+      if (!txData.events?.swap || txData.events.swap.length === 0) {
         return;
       }
 
-      // Проверяем что транзакция не обработана
-      if (await this.database.isTransactionProcessed(transaction.signature)) {
-        return;
-      }
-
-      // Парсим SWAP транзакцию
-      const swapData = await this.parseSwapFromWebhook(transaction);
-      if (!swapData) {
-        return;
-      }
-
-      // Фильтруем по минимальной сумме
-      if (swapData.amountUSD < parseInt(process.env.MIN_TRANSACTION_USD || '1500')) {
-        return;
-      }
-
-      // Получаем информацию о кошельке - ТЕПЕРЬ ИСПОЛЬЗУЕМ ПУБЛИЧНЫЙ МЕТОД
-      const walletInfo = await this.solanaMonitor.getWalletInfo(swapData.walletAddress);
+      const swapEvents = txData.events.swap;
       
-      // Анализируем историю торговли - ТЕПЕРЬ ИСПОЛЬЗУЕМ ПУБЛИЧНЫЙ МЕТОД
-      const tradingHistory = await this.solanaMonitor.getTradingHistory(swapData.walletAddress);
-      walletInfo.tradingHistory = tradingHistory;
+      for (const swapEvent of swapEvents) {
+        await this.processSwapEvent(txData, swapEvent);
+      }
+    } catch (error) {
+      this.logger.error(`❌ Error processing transaction ${txData.signature}:`, error as Error);
+    }
+  }
 
-      // Вычисляем подозрительность - ТЕПЕРЬ ИСПОЛЬЗУЕМ ПУБЛИЧНЫЕ МЕТОДЫ
-      walletInfo.suspicionScore = this.solanaMonitor.calculateSuspicionScore(walletInfo, swapData);
-      walletInfo.insiderFlags = this.solanaMonitor.getInsiderFlags(walletInfo, swapData);
+  private async processSwapEvent(txData: HeliusWebhookPayload, swapEvent: any): Promise<void> {
+    try {
+      // Извлекаем информацию о свапе
+      const walletAddress = this.extractWalletAddress(swapEvent);
+      if (!walletAddress) return;
 
-      // Создаем полную информацию о сделке
-      const tokenSwap: TokenSwap = {
-        ...swapData,
-        isNewWallet: walletInfo.isNew,
-        isReactivatedWallet: walletInfo.isReactivated,
-        walletAge: walletInfo.isNew ? 
-          Math.floor((Date.now() - walletInfo.createdAt.getTime()) / (1000 * 60 * 60)) : 0,
-        daysSinceLastActivity: walletInfo.isReactivated ?
-          Math.floor((Date.now() - walletInfo.lastActivityAt.getTime()) / (1000 * 60 * 60 * 24)) : 0,
-        price: swapData.amountUSD / swapData.amount,
-        pnl: Math.floor(Math.random() * 5000) + 500,
-        multiplier: 1 + (Math.random() * 2),
-        winrate: tradingHistory.winRate || (60 + Math.random() * 30),
-        timeToTarget: this.generateTimeToTarget(),
-      };
-
-      // Сохраняем в базу
-      await this.database.saveTransaction(tokenSwap);
-
-      // Отправляем индивидуальный алерт
-      await this.telegramNotifier.sendIndividualPurchase(tokenSwap);
-
-      // Проверяем на инсайдера - ТЕПЕРЬ ИСПОЛЬЗУЕМ ПУБЛИЧНЫЙ МЕТОД
-      const insiderAnalysis = await this.solanaMonitor.analyzeForInsider(tokenSwap, walletInfo);
-      if (insiderAnalysis) {
-        await this.telegramNotifier.sendInsiderAlert(insiderAnalysis);
+      // Проверяем, является ли кошелек Smart Money
+      const smartWallet = await this.smDatabase.getSmartWallet(walletAddress);
+      if (!smartWallet || !smartWallet.isActive) {
+        // Если это не Smart Money кошелек, используем обычную обработку
+        await this.solanaMonitor.processTransaction(txData);
+        return;
       }
 
-      // Крупные ордера
-      const bigOrderThreshold = parseInt(process.env.BIG_ORDER_THRESHOLD || '10000');
-      if (tokenSwap.amountUSD >= bigOrderThreshold) {
-        await this.telegramNotifier.sendBigOrderAlert(tokenSwap, walletInfo);
+      // Обрабатываем как Smart Money транзакцию
+      const swapInfo = await this.extractSwapInfo(txData, swapEvent, smartWallet);
+      if (!swapInfo) return;
+
+      // Применяем фильтры для Smart Money
+      if (!this.shouldProcessSmartMoneySwap(swapInfo, smartWallet)) {
+        return;
       }
 
-      this.logger.info(`Processed SWAP: ${tokenSwap.tokenSymbol} - ${tokenSwap.amountUSD} by ${this.truncateAddress(tokenSwap.walletAddress)}`);
+      // Сохраняем транзакцию в базу
+      await this.saveSmartMoneyTransaction(swapInfo);
+
+      // Отправляем уведомление
+      await this.sendSmartMoneyNotification(swapInfo, smartWallet);
+
+      this.logger.info(`✅ Smart Money swap processed: ${swapInfo.tokenSymbol} - $${swapInfo.amountUSD}`);
 
     } catch (error) {
-      this.logger.error(`Error processing webhook transaction ${transaction.signature}:`, error);
+      this.logger.error('❌ Error processing swap event:', error as Error);
     }
   }
 
-  private isSwapTransaction(transaction: HeliusWebhookPayload): boolean {
-    // Проверяем по типу транзакции
-    if (transaction.type === 'SWAP') {
-      return true;
+  private extractWalletAddress(swapEvent: any): string | null {
+    // Извлекаем адрес кошелька из события свапа
+    if (swapEvent.nativeInput?.account) {
+      return swapEvent.nativeInput.account;
     }
-
-    // Проверяем по source (DEX)
-    const dexSources = ['JUPITER', 'ORCA', 'RAYDIUM', 'PHOENIX'];
-    if (dexSources.includes(transaction.source?.toUpperCase())) {
-      return true;
+    
+    if (swapEvent.tokenInputs && swapEvent.tokenInputs.length > 0) {
+      return swapEvent.tokenInputs[0].userAccount;
     }
-
-    // Проверяем по описанию
-    const swapKeywords = ['swap', 'trade', 'exchange'];
-    const description = transaction.description?.toLowerCase() || '';
-    return swapKeywords.some(keyword => description.includes(keyword));
+    
+    if (swapEvent.tokenOutputs && swapEvent.tokenOutputs.length > 0) {
+      return swapEvent.tokenOutputs[0].userAccount;
+    }
+    
+    return null;
   }
 
-  private async parseSwapFromWebhook(transaction: HeliusWebhookPayload): Promise<any> {
+  private async extractSwapInfo(txData: HeliusWebhookPayload, swapEvent: any, smartWallet: SmartMoneyWallet): Promise<SmartMoneySwap | null> {
     try {
-      // Используем tokenTransfers для определения SWAP
-      const tokenTransfers = transaction.tokenTransfers || [];
-      
-      if (tokenTransfers.length < 2) {
-        return null; // Не SWAP если менее 2 трансферов
+      // Определяем направление свапа и токены
+      let tokenAddress = '';
+      let tokenAmount = 0;
+      let amountUSD = 0;
+      let swapType: 'buy' | 'sell' = 'buy';
+
+      // Логика извлечения данных свапа
+      if (swapEvent.tokenInputs && swapEvent.tokenOutputs) {
+        // Обычный token-to-token swap
+        const tokenInput = swapEvent.tokenInputs[0];
+        const tokenOutput = swapEvent.tokenOutputs[0];
+        
+        // Определяем, какой токен не SOL/USDC (основной торгуемый токен)
+        const mainTokens = ['So11111111111111111111111111111111111111112', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v']; // SOL, USDC
+        
+        if (mainTokens.includes(tokenInput.mint)) {
+          // Покупка: SOL/USDC -> Token
+          swapType = 'buy';
+          tokenAddress = tokenOutput.mint;
+          tokenAmount = parseFloat(tokenOutput.rawTokenAmount.tokenAmount) / Math.pow(10, tokenOutput.rawTokenAmount.decimals);
+          amountUSD = parseFloat(tokenInput.rawTokenAmount.tokenAmount) / Math.pow(10, tokenInput.rawTokenAmount.decimals);
+        } else {
+          // Продажа: Token -> SOL/USDC
+          swapType = 'sell';
+          tokenAddress = tokenInput.mint;
+          tokenAmount = parseFloat(tokenInput.rawTokenAmount.tokenAmount) / Math.pow(10, tokenInput.rawTokenAmount.decimals);
+          amountUSD = parseFloat(tokenOutput.rawTokenAmount.tokenAmount) / Math.pow(10, tokenOutput.rawTokenAmount.decimals);
+        }
+      } else if (swapEvent.nativeInput && swapEvent.tokenOutputs) {
+        // SOL -> Token (покупка)
+        swapType = 'buy';
+        const tokenOutput = swapEvent.tokenOutputs[0];
+        tokenAddress = tokenOutput.mint;
+        tokenAmount = parseFloat(tokenOutput.rawTokenAmount.tokenAmount) / Math.pow(10, tokenOutput.rawTokenAmount.decimals);
+        amountUSD = parseFloat(swapEvent.nativeInput.amount) / 1e9; // SOL в USD (упрощенно)
+      } else if (swapEvent.tokenInputs && swapEvent.nativeOutput) {
+        // Token -> SOL (продажа)
+        swapType = 'sell';
+        const tokenInput = swapEvent.tokenInputs[0];
+        tokenAddress = tokenInput.mint;
+        tokenAmount = parseFloat(tokenInput.rawTokenAmount.tokenAmount) / Math.pow(10, tokenInput.rawTokenAmount.decimals);
+        amountUSD = parseFloat(swapEvent.nativeOutput.amount) / 1e9; // SOL в USD (упрощенно)
       }
 
-      // Ищем покупку токена (получение токена пользователем)
-      const tokenReceived = tokenTransfers.find(transfer => 
-        transfer.toUserAccount === transaction.feePayer && 
-        transfer.tokenAmount > 0
-      );
-
-      if (!tokenReceived) {
+      if (!tokenAddress || amountUSD === 0) {
         return null;
       }
 
-      // Получаем информацию о токене - ТЕПЕРЬ ИСПОЛЬЗУЕМ ПУБЛИЧНЫЙ МЕТОД
-      const tokenInfo = await this.solanaMonitor.getTokenInfo(tokenReceived.mint);
-
-      // Вычисляем примерную USD стоимость
-      // В реальности можно использовать Jupiter Price API
-      const estimatedUSD = this.estimateUSDValue(tokenReceived.tokenAmount, tokenReceived.mint);
-
+      // Получаем информацию о токене (символ, название)
+      const tokenInfo = await this.getTokenInfo(tokenAddress);
+      
       return {
-        transactionId: transaction.signature,
-        walletAddress: transaction.feePayer,
-        tokenAddress: tokenReceived.mint,
+        transactionId: txData.signature,
+        walletAddress: smartWallet.address,
+        tokenAddress,
         tokenSymbol: tokenInfo.symbol,
         tokenName: tokenInfo.name,
-        amount: tokenReceived.tokenAmount,
-        amountUSD: estimatedUSD,
-        timestamp: new Date(transaction.timestamp * 1000),
-        dex: this.mapSourceToDex(transaction.source),
+        tokenAmount,
+        amountUSD,
+        swapType,
+        timestamp: new Date(txData.timestamp * 1000),
+        category: smartWallet.category,
+        winRate: smartWallet.winRate,
+        pnl: smartWallet.totalPnL,
+        totalTrades: smartWallet.totalTrades,
+        isFamilyMember: smartWallet.isFamilyMember || false,
+        familySize: smartWallet.familyAddresses?.length || 0,
+        familyId: smartWallet.familyAddresses?.[0] || undefined
       };
-
     } catch (error) {
-      this.logger.error('Error parsing swap from webhook:', error);
+      this.logger.error('Error extracting swap info:', error as Error);
       return null;
     }
   }
 
-  private estimateUSDValue(tokenAmount: number, mint: string): number {
-    // Заглушка для оценки стоимости
-    // В реальности здесь должен быть запрос к Jupiter Price API
+  private shouldProcessSmartMoneySwap(swapInfo: SmartMoneySwap, smartWallet: SmartMoneyWallet): boolean {
+    // Фильтры для Smart Money уведомлений
     
-    // Для популярных токенов можем сделать приблизительную оценку
-    const knownTokenPrices: Record<string, number> = {
-      'So11111111111111111111111111111111111111112': 100, // SOL
-      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': 1,   // USDC
-      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 1,   // USDT
+    // Минимальная сумма сделки по категориям
+    const minAmounts: Record<string, number> = {
+      sniper: 5000,   // $5K для снайперов
+      hunter: 5000,   // $5K для хантеров  
+      trader: 20000   // $20K для трейдеров
     };
 
-    const pricePerToken = knownTokenPrices[mint] || 0.001; // Дефолтная цена
-    return tokenAmount * pricePerToken * (0.8 + Math.random() * 0.4); // Добавляем вариацию
+    const minAmount = minAmounts[smartWallet.category] || 5000;
+    
+    if (swapInfo.amountUSD < minAmount) {
+      return false;
+    }
+
+    // Фильтруем слишком старые кошельки (неактивные более 45 дней)
+    const daysSinceActive = (Date.now() - smartWallet.lastActiveAt.getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceActive > 45) {
+      return false;
+    }
+
+    // Минимальный win rate
+    if (smartWallet.winRate < 60) {
+      return false;
+    }
+
+    return true;
   }
 
-  private mapSourceToDex(source: string): string {
-    const sourceMap: Record<string, string> = {
-      'JUPITER': 'Jupiter',
-      'ORCA': 'Orca',
-      'RAYDIUM': 'Raydium',
-      'PHOENIX': 'Phoenix',
-    };
-    return sourceMap[source?.toUpperCase()] || source || 'Unknown';
+  private async saveSmartMoneyTransaction(swapInfo: SmartMoneySwap): Promise<void> {
+    try {
+      // Сохраняем в таблицу Smart Money транзакций
+      const stmt = this.smDatabase['db'].prepare(`
+        INSERT OR REPLACE INTO smart_money_transactions (
+          transaction_id, wallet_address, token_address, token_symbol, token_name,
+          amount, amount_usd, swap_type, timestamp, dex,
+          wallet_category, is_family_member, family_id,
+          wallet_pnl, wallet_win_rate, wallet_total_trades
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      stmt.run(
+        swapInfo.transactionId,
+        swapInfo.walletAddress,
+        swapInfo.tokenAddress,
+        swapInfo.tokenSymbol,
+        swapInfo.tokenName,
+        swapInfo.tokenAmount,
+        swapInfo.amountUSD,
+        swapInfo.swapType,
+        swapInfo.timestamp.toISOString(),
+        'Unknown', // DEX будет определяться отдельно
+        swapInfo.category,
+        swapInfo.isFamilyMember ? 1 : 0,
+        swapInfo.familyId || null,
+        swapInfo.pnl,
+        swapInfo.winRate,
+        swapInfo.totalTrades
+      );
+
+      // Также сохраняем в основную таблицу транзакций для совместимости
+      const tokenSwap: TokenSwap = {
+        transactionId: swapInfo.transactionId,
+        walletAddress: swapInfo.walletAddress,
+        tokenAddress: swapInfo.tokenAddress,
+        tokenSymbol: swapInfo.tokenSymbol,
+        tokenName: swapInfo.tokenName,
+        amount: swapInfo.tokenAmount,
+        amountUSD: swapInfo.amountUSD,
+        timestamp: swapInfo.timestamp,
+        dex: 'Smart Money',
+        isNewWallet: false,
+        isReactivatedWallet: false,
+        walletAge: 0,
+        daysSinceLastActivity: 0,
+        price: swapInfo.amountUSD / swapInfo.tokenAmount,
+        pnl: swapInfo.pnl,
+        swapType: swapInfo.swapType
+      };
+
+      await this.database.saveTransaction(tokenSwap);
+
+    } catch (error) {
+      this.logger.error('Error saving Smart Money transaction:', error as Error);
+    }
   }
 
-  private generateTimeToTarget(): string {
-    const hours = Math.floor(Math.random() * 72) + 1;
-    const minutes = Math.floor(Math.random() * 60);
-    return `${hours}h ${minutes}m`;
+  private async sendSmartMoneyNotification(swapInfo: SmartMoneySwap, smartWallet: SmartMoneyWallet): Promise<void> {
+    try {
+      // Отправляем уведомление через TelegramNotifier
+      await this.telegramNotifier.sendSmartMoneySwap(swapInfo);
+      
+    } catch (error) {
+      this.logger.error('Error sending Smart Money notification:', error as Error);
+    }
   }
 
-  private truncateAddress(address: string): string {
-    return `${address.slice(0, 4)}...${address.slice(-4)}`;
-  }
+  private async getTokenInfo(tokenAddress: string): Promise<{ symbol: string; name: string }> {
+    try {
+      // Кэшируем информацию о токенах для производительности
+      const cachedInfo = this.tokenInfoCache.get(tokenAddress);
+      if (cachedInfo) {
+        return cachedInfo;
+      }
 
-  public start(): Promise<void> {
-    return new Promise((resolve) => {
-      this.app.listen(this.port, () => {
-        this.logger.info(`🚀 Webhook server running on port ${this.port}`);
-        this.logger.info(`📡 Webhook endpoint: http://localhost:${this.port}/webhook`);
-        resolve();
+      // Запрос к Helius для получения метаданных токена
+      const response = await fetch(`https://api.helius.xyz/v0/tokens/metadata?api-key=${process.env.HELIUS_API_KEY}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          mintAccounts: [tokenAddress]
+        })
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data && Array.isArray(data) && data.length > 0) {
+        const tokenInfo = {
+          symbol: data[0].onChainMetadata?.metadata?.symbol || 'UNKNOWN',
+          name: data[0].onChainMetadata?.metadata?.name || 'Unknown Token'
+        };
+        
+        // Кэшируем на 1 час
+        this.tokenInfoCache.set(tokenAddress, tokenInfo);
+        setTimeout(() => {
+          this.tokenInfoCache.delete(tokenAddress);
+        }, 60 * 60 * 1000);
+        
+        return tokenInfo;
+      }
+
+      return { symbol: 'UNKNOWN', name: 'Unknown Token' };
+    } catch (error) {
+      this.logger.error(`Error getting token info for ${tokenAddress}:`, error as Error);
+      return { symbol: 'UNKNOWN', name: 'Unknown Token' };
+    }
+  }
+
+  // Метод для проверки Token Name Alerts
+  private async checkTokenNameAlerts(txData: HeliusWebhookPayload): Promise<void> {
+    try {
+      // Ищем новые токены в транзакции
+      const tokenAddresses = new Set<string>();
+      
+      // Извлекаем адреса токенов из transfers
+      if (txData.tokenTransfers) {
+        for (const transfer of txData.tokenTransfers) {
+          tokenAddresses.add(transfer.mint);
+        }
+      }
+
+      // Проверяем каждый токен
+      for (const tokenAddress of tokenAddresses) {
+        await this.analyzeTokenForNameAlert(tokenAddress);
+      }
+
+    } catch (error) {
+      this.logger.error('Error checking token name alerts:', error as Error);
+    }
+  }
+
+  private async analyzeTokenForNameAlert(tokenAddress: string): Promise<void> {
+    try {
+      // Получаем метаданные токена
+      const tokenInfo = await this.getTokenInfo(tokenAddress);
+      if (!tokenInfo.name || tokenInfo.name === 'Unknown Token') {
+        return;
+      }
+
+      // Получаем количество держателей через Helius API
+      const holdersCount = await this.getTokenHoldersCount(tokenAddress);
+      
+      // Проверяем паттерн имени токена
+      const alertData = await this.database.checkTokenNamePattern(
+        tokenInfo.name,
+        tokenAddress,
+        holdersCount
+      );
+
+      if (alertData.shouldAlert) {
+        // Отправляем уведомление
+        await this.telegramNotifier.sendTokenNameAlert({
+          tokenName: tokenInfo.name,
+          contractAddress: alertData.tokenAddress!,
+          holders: alertData.holders!,
+          similarTokens: alertData.similarCount!
+        });
+
+        this.logger.info(`🚨 Token Name Alert sent: ${tokenInfo.name} (${alertData.similarCount} similar tokens)`);
+      }
+
+    } catch (error) {
+      this.logger.error(`Error analyzing token ${tokenAddress} for name alert:`, error as Error);
+    }
+  }
+
+  private async getTokenHoldersCount(tokenAddress: string): Promise<number> {
+    try {
+      const response = await fetch(`https://api.helius.xyz/v0/addresses/${tokenAddress}/balances?api-key=${process.env.HELIUS_API_KEY}`);
+      
+      if (!response.ok) {
+        return 0;
+      }
+
+      const data = await response.json() as any;
+      return Array.isArray(data.tokens) ? data.tokens.length : 0;
+
+    } catch (error) {
+      this.logger.error(`Error getting holders count for ${tokenAddress}:`, error as Error);
+      return 0;
+    }
+  }
+
+  // Кэш для информации о токенах
+  private tokenInfoCache = new Map<string, { symbol: string; name: string }>();
+
+  async start(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        this.server = this.app.listen(this.port, '0.0.0.0', () => {
+          this.logger.info(`🌐 Background Worker webhook server started on port ${this.port}`);
+          this.logger.info(`📡 Webhook endpoint ready: http://localhost:${this.port}/webhook`);
+          this.logger.info(`💊 Health check: http://localhost:${this.port}/health`);
+          resolve();
+        });
+
+        this.server.on('error', (error: any) => {
+          this.logger.error('❌ Webhook server error:', error);
+          reject(error);
+        });
+
+      } catch (error) {
+        this.logger.error('❌ Failed to start webhook server:', error as Error);
+        reject(error);
+      }
     });
   }
 
-  public getApp(): express.Application {
-    return this.app;
+  async stop(): Promise<void> {
+    if (this.server) {
+      return new Promise((resolve) => {
+        this.server.close(() => {
+          this.logger.info('🔴 Webhook server stopped');
+          resolve();
+        });
+      });
+    }
+  }
+
+  // Метод для получения статистики сервера
+  getServerStats() {
+    return {
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      port: this.port,
+      environment: process.env.NODE_ENV || 'development'
+    };
   }
 }

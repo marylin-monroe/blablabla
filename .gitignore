@@ -2,7 +2,23 @@ node_modules/
 dist/
 .env
 .env.local
+.env.production
+.env.development
 *.log
 data/
 logs/
 .DS_Store
+
+# Дополнительно:
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+.pnp
+.pnp.js
+coverage/
+*.tsbuildinfo
+.nyc_output
+temp/
+tmp/

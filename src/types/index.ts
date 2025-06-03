@@ -1,4 +1,4 @@
-// src/types/index.ts
+// src/types/index.ts - ИСПРАВЛЕНО со всеми типами
 export interface TokenSwap {
   transactionId: string;
   walletAddress: string;
@@ -18,6 +18,7 @@ export interface TokenSwap {
   multiplier?: number;
   winrate?: number;
   timeToTarget?: string;
+  swapType?: 'buy' | 'sell';
 }
 
 export interface WalletInfo {
@@ -82,7 +83,13 @@ export interface SmartMoneyReport {
 
 export interface InsiderAlert {
   walletAddress: string;
-  tokenSwap: TokenSwap;
+  tokenSwap?: TokenSwap;
+  tokenAddress?: string;
+  tokenSymbol?: string;
+  amountUSD?: number;
+  price?: number;
+  signalStrength?: number;
+  timestamp?: Date;
   suspicionScore: number;
   detectionReasons: string[];
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
@@ -103,4 +110,131 @@ export interface HeliusTransaction {
   tokenTransfers?: any[];
   accountData?: any[];
   transactionError?: any;
+}
+
+// ДОБАВЛЯЕМ Smart Money типы прямо сюда
+export interface SmartMoneyWallet {
+  address: string;
+  category: 'sniper' | 'hunter' | 'trader';
+  winRate: number;
+  totalPnL: number;
+  totalTrades: number;
+  avgTradeSize: number;
+  maxTradeSize: number;
+  minTradeSize: number;
+  sharpeRatio?: number;
+  maxDrawdown?: number;
+  lastActiveAt: Date;
+  performanceScore: number;
+  volumeScore?: number;
+  isActive: boolean;
+  
+  // Семейные связи
+  isFamilyMember?: boolean;
+  familyAddresses?: string[];
+  coordinationScore?: number;
+  stealthLevel?: number;
+  
+  // Категория-специфичные метрики
+  earlyEntryRate?: number;
+  avgHoldTime?: number;
+  
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface SmartMoneyFlow {
+  tokenAddress: string;
+  tokenSymbol: string;
+  tokenName: string;
+  period: '1h' | '24h';
+  totalInflowUSD: number;
+  totalOutflowUSD: number;
+  netFlowUSD: number;
+  uniqueWallets: number;
+  avgTradeSize: number;
+  topWallets: Array<{
+    address: string;
+    amountUSD: number;
+    category: string;
+  }>;
+}
+
+export interface HotNewToken {
+  address: string;
+  symbol: string;
+  name: string;
+  fdv: number;
+  smStakeUSD: number;
+  ageHours: number;
+  buyVolumeUSD: number;
+  sellVolumeUSD: number;
+  buyCount: number;
+  sellCount: number;
+  uniqueSmWallets: number;
+  topBuyers: Array<{
+    address: string;
+    amountUSD: number;
+    category: string;
+  }>;
+}
+
+export interface SmartMoneySwap {
+  transactionId: string;
+  walletAddress: string;
+  tokenAddress: string;
+  tokenSymbol: string;
+  tokenName: string;
+  tokenAmount: number;
+  amountUSD: number;
+  swapType: 'buy' | 'sell';
+  timestamp: Date;
+  
+  // Smart Money метрики
+  category: 'sniper' | 'hunter' | 'trader';
+  winRate: number;
+  pnl: number;
+  totalTrades: number;
+  
+  // Семейная информация
+  isFamilyMember: boolean;
+  familySize?: number;
+  familyId?: string;
+}
+
+export interface FamilyWalletCluster {
+  id: string;
+  wallets: string[];
+  suspicionScore: number;
+  coordinationScore: number;
+  detectionMethods: string[];
+  totalPnL: number;
+  combinedVolume: number;
+  avgTimingDiff: number;
+  commonTokens: string[];
+  createdAt: Date;
+}
+
+export interface WalletPerformanceMetrics {
+  totalPnL: number;
+  winRate: number;
+  totalTrades: number;
+  avgTradeSize: number;
+  maxTradeSize: number;
+  minTradeSize: number;
+  sharpeRatio: number;
+  maxDrawdown: number;
+  profitFactor: number;
+  avgHoldTime: number;
+  earlyEntryRate: number;
+  recentActivity: Date;
+}
+
+export interface WalletAnalysisResult {
+  address: string;
+  isSmartMoney: boolean;
+  category?: 'sniper' | 'hunter' | 'trader';
+  metrics: WalletPerformanceMetrics;
+  familyConnections: string[];
+  disqualificationReasons: string[];
 }

@@ -1,6 +1,6 @@
-// src/services/TelegramNotifier.ts
+// src/services/TelegramNotifier.ts - ИСПРАВЛЕНО все ошибки
 import TelegramBot from 'node-telegram-bot-api';
-import { TokenSwap, WalletInfo, SmartMoneyReport, InsiderAlert } from '../types';
+import { TokenSwap, WalletInfo, SmartMoneyReport, InsiderAlert, SmartMoneyFlow, HotNewToken, SmartMoneySwap } from '../types';
 import { Logger } from '../utils/Logger';
 
 export class TelegramNotifier {
@@ -14,259 +14,362 @@ export class TelegramNotifier {
     this.logger = Logger.getInstance();
   }
 
-  // ЧАСТЬ 1: Отчёт по отдельным покупкам ≥ $1500 (табличная визуализация)
-  async sendIndividualPurchase(swap: TokenSwap): Promise<void> {
+  // Метод для отправки топ притоков Smart Money
+  async sendTopSmartMoneyInflows(inflows: SmartMoneyFlow[]): Promise<void> {
     try {
-      const walletShort = this.truncateAddress(swap.walletAddress);
-      const multiplierStr = swap.multiplier ? `${swap.multiplier.toFixed(1)}x` : '1.0x';
-      const winrateStr = swap.winrate ? `${Math.floor(swap.winrate)}%` : '85%';
-      const pnlStr = swap.pnl ? `+$${this.formatNumber(swap.pnl)}` : '+$0';
-      const priceStr = swap.price ? `${swap.price.toFixed(6)}` : '$0.000001';
-      const timeStr = swap.timeToTarget || '12h 30m';
-
-      const message = `
-\`\`\`
-┌────────────┬─────────────────────┐
-│ 💸 Spent   │ ${this.formatNumberPadded(swap.amountUSD)}              │
-│ 📦 Amount  │ ${this.formatTokenAmount(swap.amount)} ${swap.tokenSymbol} │
-│ 📈 Price   │ ${priceStr}           │
-│ 📊 Winrate │ ${winrateStr}                 │
-│ 📈 PnL     │ ${pnlStr}             │
-│ ✖️ X       │ ${multiplierStr}                │
-│ ⏱️ TT       │ ${timeStr}              │
-│ 🔗 Wallet  │ https://solscan.io/account/${walletShort} │
-│ 🕐 Time    │ ${this.formatTime(swap.timestamp)}           │
-└────────────┴─────────────────────┘
-\`\`\``;
-
-      await this.bot.sendMessage(this.userId, message, {
-        parse_mode: 'Markdown',
-        disable_web_page_preview: true,
-      });
-
-      this.logger.info(`Individual purchase sent: ${swap.tokenSymbol} - ${swap.amountUSD}`);
-
-    } catch (error) {
-      this.logger.error('Error sending individual purchase:', error);
-    }
-  }
-
-  // ЧАСТЬ 2: Агрегированная таблица "Top Smart Money Inflows"
-  async sendTopInflowsReport(report: SmartMoneyReport): Promise<void> {
-    try {
-      let message = `📊 <b>Top Smart Money Inflows (Last ${report.period})</b>\n\n`;
-
-      // Показываем топ токены
-      const topTokens = report.tokenAggregations.slice(0, 10);
-      
-      for (let i = 0; i < topTokens.length; i++) {
-        const agg = topTokens[i];
-        const walletCount = agg.uniqueWallets.size;
-        const volumeStr = this.formatNumber(agg.totalVolumeUSD);
-        
-        message += `<code>${(i + 1).toString().padStart(2, ' ')}. ${agg.tokenSymbol.padEnd(12)} — ${walletCount.toString().padStart(2, ' ')} wallets — ${volumeStr.padStart(7)}</code>\n`;
-      }
-
-      // Добавляем сводку
-      message += `\n━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-      message += `📊 <b>Summary:</b>\n`;
-      message += `• Total Volume: ${this.formatNumber(report.totalVolumeUSD)}\n`;
-      message += `• Unique Tokens: ${topTokens.length}\n`;
-      message += `• Big Orders (>${this.formatNumber(parseInt(process.env.BIG_ORDER_THRESHOLD || '10000'))}): ${report.bigOrders.length}\n`;
-      
-      if (report.insiderAlerts.length > 0) {
-        message += `• 🎭 Insider Alerts: ${report.insiderAlerts.length}\n`;
-      }
+      const message = `💚 <b>Top Smart Money Inflows in the past 1 hour (Solana)</b> <code>#TopSMIn1sol</code>\n\n${
+        inflows.slice(0, 5).map(flow =>
+          `<code>#${flow.tokenSymbol}</code> <b>$${this.formatNumber(flow.totalInflowUSD)}</b> <a href="https://solscan.io/token/${flow.tokenAddress}">SolS</a> <a href="https://dexscreener.com/solana/${flow.tokenAddress}">DS</a>`
+        ).join('\n')
+      }`;
 
       await this.bot.sendMessage(this.userId, message, {
         parse_mode: 'HTML',
         disable_web_page_preview: true,
       });
 
-      this.logger.info(`Top inflows report sent with ${topTokens.length} tokens`);
-
+      this.logger.info(`Top Smart Money Inflows sent: ${inflows.length} tokens`);
     } catch (error) {
-      this.logger.error('Error sending top inflows report:', error);
+      this.logger.error('Error sending top smart money inflows:', error);
     }
   }
 
-  // Алерт о спящем инсайдере (новый!)
+  // Метод для отправки алертов Hot New Token
+  async sendHotNewTokenAlert(hotToken: HotNewToken): Promise<void> {
+    try {
+      const ageText = hotToken.ageHours < 1 
+        ? `${Math.round(hotToken.ageHours * 60)}m` 
+        : `${Math.round(hotToken.ageHours)}h`;
+
+      const message = `🔥💎 <b>Hot New Token on Smart Money (Solana)</b> <code>FDV #HotNTSMsol</code>
+
+<code>#${hotToken.symbol}</code> <b>FDV:</b> <code>$${this.formatNumber(hotToken.fdv)}</code> <b>SH:</b> <code>$${this.formatNumber(hotToken.smStakeUSD)}</code> <b>Age:</b> <code>${ageText}</code> <b>Buy:</b> <code>$${this.formatNumber(hotToken.buyVolumeUSD)} (${hotToken.buyCount})</code> <b>Sell:</b> <code>$${this.formatNumber(hotToken.sellVolumeUSD)} (${hotToken.sellCount})</code> <a href="https://solscan.io/token/${hotToken.address}">SolS</a> <a href="https://dexscreener.com/solana/${hotToken.address}">DS</a>`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      this.logger.info(`Hot New Token alert sent: ${hotToken.symbol} - $${hotToken.smStakeUSD}`);
+    } catch (error) {
+      this.logger.error('Error sending hot new token alert:', error);
+    }
+  }
+
+  // Улучшенный метод для отправки Smart Money свапов
+  async sendSmartMoneySwap(swap: SmartMoneySwap): Promise<void> {
+    try {
+      const categoryEmoji = this.getCategoryEmoji(swap.category);
+      const familyText = swap.isFamilyMember ? ` <b>Family:</b> <code>${swap.familySize}</code>` : '';
+      const walletShort = this.truncateAddress(swap.walletAddress);
+
+      const message = `${categoryEmoji}💚 <b>$${this.formatNumber(swap.amountUSD)}</b> 💚 <code>${this.formatTokenAmount(swap.tokenAmount)} #${swap.tokenSymbol}</code> <code>($${(swap.amountUSD / swap.tokenAmount).toFixed(6)})</code> <code>#${walletShort}</code> <b>WR:</b> <code>${swap.winRate.toFixed(2)}%</code> <b>PNL:</b> <code>$${this.formatNumber(swap.pnl)}</code> <b>TT:</b> <code>${swap.totalTrades}</code>${familyText} <a href="https://solscan.io/token/${swap.tokenAddress}">SolS</a> <a href="https://dexscreener.com/solana/${swap.tokenAddress}">DS</a>
+
+<a href="https://solscan.io/account/${swap.walletAddress}">Wallet</a> <a href="https://solscan.io/tx/${swap.transactionId}">TXN</a> <code>#SmartSwapSol</code>
+
+<code>${swap.walletAddress}</code>`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      this.logger.info(`Smart Money swap sent: ${swap.tokenSymbol} - $${swap.amountUSD}`);
+    } catch (error) {
+      this.logger.error('Error sending smart money swap:', error);
+    }
+  }
+
+  // Метод для отправки Token Name Alerts
+  async sendTokenNameAlert(tokenData: {
+    tokenName: string;
+    contractAddress: string;
+    holders: number;
+    similarTokens: number;
+  }): Promise<void> {
+    try {
+      const message = `⚠️ <b>Token Name Alert</b> <code>#TokenNameAlert</code>
+
+<b>Token:</b> <code>#${tokenData.tokenName}</code>
+<b>Contract:</b> <code>${tokenData.contractAddress}</code>
+<b>Holders:</b> <code>${tokenData.holders}+</code>
+<b>Similar tokens created:</b> <code>${tokenData.similarTokens}</code>
+
+⚠️ <i>99% of such tokens are scam. Be careful!</i>
+
+<a href="https://solscan.io/token/${tokenData.contractAddress}">SolS</a> <a href="https://dexscreener.com/solana/${tokenData.contractAddress}">DS</a>`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      this.logger.info(`Token Name Alert sent: ${tokenData.tokenName}`);
+    } catch (error) {
+      this.logger.error('Error sending token name alert:', error);
+    }
+  }
+
+  // Метод для отправки сводки Smart Money Inflows/Outflows
+  async sendInflowOutflowSummary(type: 'inflow' | 'outflow', period: '1h' | '24h', flows: SmartMoneyFlow[]): Promise<void> {
+    try {
+      const emoji = type === 'inflow' ? '📈💚' : '📉🔴';
+      const typeText = type === 'inflow' ? 'Inflows' : 'Outflows';
+      const periodText = period === '1h' ? '1 hour' : '24 hours';
+      
+      let message = `${emoji} <b>Smart Money ${typeText} (${periodText})</b> <code>#SM${typeText}${period}sol</code>\n\n`;
+
+      flows.slice(0, 8).forEach((flow, index) => {
+        const amount = type === 'inflow' ? flow.totalInflowUSD : flow.totalOutflowUSD;
+        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${flow.tokenSymbol}</code> <b>$${this.formatNumber(amount)}</b> <code>(${flow.uniqueWallets} wallets)</code>\n`;
+      });
+
+      message += `\n<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      this.logger.info(`Smart Money ${typeText} ${period} summary sent: ${flows.length} tokens`);
+    } catch (error) {
+      this.logger.error(`Error sending ${type} summary:`, error);
+    }
+  }
+
+  // Метод для отправки Hot New Tokens сортированных по кошелькам
+  async sendHotNewTokensByWallets(tokens: HotNewToken[]): Promise<void> {
+    try {
+      let message = `🔥💎 <b>Hot New Tokens by Smart Money Wallets</b> <code>#HotNTWalletsSol</code>\n\n`;
+
+      tokens.slice(0, 10).forEach((token, index) => {
+        const ageText = token.ageHours < 1 
+          ? `${Math.round(token.ageHours * 60)}m` 
+          : `${Math.round(token.ageHours)}h`;
+
+        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${token.symbol}</code> <b>${token.uniqueSmWallets} wallets</b> <code>$${this.formatNumber(token.smStakeUSD)}</code> <code>${ageText}</code>\n`;
+      });
+
+      message += `\n<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      this.logger.info(`Hot New Tokens by Wallets sent: ${tokens.length} tokens`);
+    } catch (error) {
+      this.logger.error('Error sending hot new tokens by wallets:', error);
+    }
+  }
+
+  // Метод для отправки Hot New Tokens сортированных по возрасту
+  async sendHotNewTokensByAge(tokens: HotNewToken[]): Promise<void> {
+    try {
+      let message = `🔥⏰ <b>Hot New Tokens by Age</b> <code>#HotNTAgeSol</code>\n\n`;
+
+      const sortedByAge = tokens.sort((a, b) => a.ageHours - b.ageHours);
+
+      sortedByAge.slice(0, 10).forEach((token, index) => {
+        const ageText = token.ageHours < 1 
+          ? `${Math.round(token.ageHours * 60)}m` 
+          : `${Math.round(token.ageHours)}h`;
+
+        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${token.symbol}</code> <code>${ageText}</code> <b>$${this.formatNumber(token.smStakeUSD)}</b> <code>${token.uniqueSmWallets}w</code>\n`;
+      });
+
+      message += `\n<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      this.logger.info(`Hot New Tokens by Age sent: ${tokens.length} tokens`);
+    } catch (error) {
+      this.logger.error('Error sending hot new tokens by age:', error);
+    }
+  }
+
+  // Метод для отправки Hot New Tokens сортированных по FDV
+  async sendHotNewTokensByFDV(tokens: HotNewToken[]): Promise<void> {
+    try {
+      let message = `🔥💰 <b>Hot New Tokens by FDV</b> <code>#HotNTFDVSol</code>\n\n`;
+
+      const sortedByFDV = tokens.sort((a, b) => b.fdv - a.fdv);
+
+      sortedByFDV.slice(0, 10).forEach((token, index) => {
+        const ageText = token.ageHours < 1 
+          ? `${Math.round(token.ageHours * 60)}m` 
+          : `${Math.round(token.ageHours)}h`;
+
+        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${token.symbol}</code> <b>$${this.formatNumber(token.fdv)}</b> <code>$${this.formatNumber(token.smStakeUSD)}</code> <code>${ageText}</code>\n`;
+      });
+
+      message += `\n<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      this.logger.info(`Hot New Tokens by FDV sent: ${tokens.length} tokens`);
+    } catch (error) {
+      this.logger.error('Error sending hot new tokens by FDV:', error);
+    }
+  }
+
+  // Метод для отправки уведомлений о семейных кошельках
+  async sendFamilyWalletAlert(familyData: {
+    id: string;
+    wallets: string[];
+    suspicionScore: number;
+    detectionMethod: string;
+    totalPnL: number;
+    coordinationScore: number;
+  }): Promise<void> {
+    try {
+      const message = `🔗👥 <b>Family Wallet Detected</b> <code>#FamilyWallet</code>
+
+<b>Cluster ID:</b> <code>${familyData.id}</code>
+<b>Wallets:</b> <code>${familyData.wallets.length}</code>
+<b>Suspicion Score:</b> <code>${familyData.suspicionScore}/100</code>
+<b>Detection Method:</b> <code>${familyData.detectionMethod}</code>
+<b>Combined PnL:</b> <code>$${this.formatNumber(familyData.totalPnL)}</code>
+<b>Coordination:</b> <code>${familyData.coordinationScore.toFixed(1)}%</code>
+
+<b>Wallets:</b>
+${familyData.wallets.slice(0, 5).map(wallet => 
+  `<code>${this.truncateAddress(wallet)}</code>`
+).join('\n')}`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      this.logger.info(`Family Wallet Alert sent: ${familyData.wallets.length} wallets`);
+    } catch (error) {
+      this.logger.error('Error sending family wallet alert:', error);
+    }
+  }
+
+  // Метод для отправки статистики базы Smart Money кошельков
+  async sendWalletDatabaseStats(stats: {
+    total: number;
+    active: number;
+    byCategory: Record<string, number>;
+    familyMembers: number;
+    newlyAdded: number;
+    deactivated: number;
+  }): Promise<void> {
+    try {
+      const message = `📊 <b>Smart Money Database Update</b> <code>#SMDBUpdate</code>
+
+<b>📈 Active Wallets:</b> <code>${stats.active}</code> (Total: <code>${stats.total}</code>)
+
+<b>By Category:</b>
+🔫 <b>Snipers:</b> <code>${stats.byCategory.sniper || 0}</code>
+💡 <b>Hunters:</b> <code>${stats.byCategory.hunter || 0}</code>
+🐳 <b>Traders:</b> <code>${stats.byCategory.trader || 0}</code>
+
+👥 <b>Family Members:</b> <code>${stats.familyMembers}</code>
+✅ <b>Newly Added:</b> <code>${stats.newlyAdded}</code>
+❌ <b>Deactivated:</b> <code>${stats.deactivated}</code>
+
+<i>Next update in 2 weeks</i>`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      this.logger.info(`Wallet Database Stats sent: ${stats.active} active wallets`);
+    } catch (error) {
+      this.logger.error('Error sending wallet database stats:', error);
+    }
+  }
+
+  // Существующие методы из оригинального кода
   async sendInsiderAlert(alert: InsiderAlert): Promise<void> {
     try {
-      const swap = alert.tokenSwap;
-      const history = alert.tradingHistory;
+      const walletShort = this.truncateAddress(alert.walletAddress);
+      const amountUSD = alert.amountUSD || 0;
+      const price = alert.price || 0;
       
-      // Эмодзи по уровню риска
-      const riskEmoji = {
-        'LOW': '🟡',
-        'MEDIUM': '🟠', 
-        'HIGH': '🔴',
-        'CRITICAL': '🚨'
-      };
+      const message = `🚨 <b>INSIDER ALERT</b> 🚨
 
-      // Форматируем причины детекции
-      const reasons = alert.detectionReasons.map(reason => {
-        switch(reason) {
-          case 'CONFIDENCE_PARADOX': return '⚡ Confidence Paradox - Bad history but big bet';
-          case 'SLEEPING_BEAUTY': return '😴 Sleeping Beauty - Old wallet suddenly active';
-          case 'EXPONENTIAL_GROWTH': return '📈 Exponential Growth - Size increased 75x+';
-          case 'FAKE_NOOB_PATTERN': return '🎭 Fake Noob - Too many "losses"';
-          default: return `• ${reason}`;
-        }
-      }).join('\n');
+💰 <b>Spent:</b> <code>$${this.formatNumber(amountUSD)}</code>
+🪙 <b>Token:</b> <code>#${alert.tokenSymbol}</code>
+📊 <b>Price:</b> <code>$${price.toFixed(8)}</code>
+👤 <b>Wallet:</b> <code>${walletShort}</code>
+⚡ <b>Signal Strength:</b> <code>${alert.signalStrength || 0}/10</code>
 
-      const ageInDays = Math.floor((Date.now() - swap.timestamp.getTime()) / (1000 * 60 * 60 * 24));
-      const growthRate = history.maxBuySize > 0 ? (swap.amountUSD / history.avgBuySize).toFixed(1) : 'N/A';
-
-      const message = `
-${riskEmoji[alert.riskLevel]} <b>SLEEPING INSIDER DETECTED!</b>
-
-👤 <b>Wallet:</b> <code>${swap.walletAddress}</code>
-📊 <b>Fake History:</b> ${Math.floor(history.winRate)}% WR, avg buy ${this.formatNumber(history.avgBuySize)}
-🚨 <b>Anomaly:</b> Just bought ${this.formatNumber(swap.amountUSD)} of ${swap.tokenSymbol}
-
-🎭 <b>DECEPTION TACTICS DETECTED:</b>
-${reasons}
-
-🎯 <b>Analysis:</b>
-• Suspicion Score: ${alert.suspicionScore.toFixed(1)}/100 (${alert.riskLevel})
-• Growth Rate: ${growthRate}x from avg size
-• Wallet Age: ${ageInDays} days old
-• Confidence: ${(alert.confidence * 100).toFixed(0)}%
-
-🚀 <b>COPY IMMEDIATELY - This is the real deal!</b>
-
-🔍 <a href="https://solscan.io/account/${swap.walletAddress}">View Wallet</a> | <a href="https://birdeye.so/token/${swap.tokenAddress}">View Token</a>
-`;
+<a href="https://solscan.io/account/${alert.walletAddress}">View Wallet</a> | <a href="https://dexscreener.com/solana/${alert.tokenAddress}">Chart</a>`;
 
       await this.bot.sendMessage(this.userId, message, {
         parse_mode: 'HTML',
         disable_web_page_preview: true,
       });
 
-      this.logger.info(`Insider alert sent: ${swap.tokenSymbol} - Score: ${alert.suspicionScore}`);
-
+      this.logger.info(`Insider alert sent: ${alert.tokenSymbol} - $${amountUSD}`);
     } catch (error) {
       this.logger.error('Error sending insider alert:', error);
     }
   }
 
-  // Метод для отправки логов о циклах работы бота
   async sendCycleLog(message: string): Promise<void> {
     try {
-      await this.bot.sendMessage(this.userId, `🤖 <b>Bot Status</b>\n\n${message}`, {
+      await this.bot.sendMessage(this.userId, message, {
         parse_mode: 'HTML',
+        disable_web_page_preview: true,
       });
-      this.logger.info(`Cycle log sent: ${message}`);
     } catch (error) {
       this.logger.error('Error sending cycle log:', error);
     }
   }
 
-  // Метод для уведомления об отсутствии активности
-  async sendNoActivityAlert(minAmount: number): Promise<void> {
-    try {
-      const message = `
-📊 <b>No Smart Money Activity</b>
-
-No transactions above ${this.formatNumber(minAmount)} detected in this period.
-
-The bot is working correctly and will notify you when smart money moves.
-`;
-
-      await this.bot.sendMessage(this.userId, message, {
-        parse_mode: 'HTML',
-      });
-
-      this.logger.info('No activity alert sent');
-    } catch (error) {
-      this.logger.error('Error sending no activity alert:', error);
+  // Вспомогательные методы для форматирования
+  private getCategoryEmoji(category: string): string {
+    switch (category) {
+      case 'sniper': return '🔫';
+      case 'hunter': return '💡';
+      case 'trader': return '🐳';
+      default: return '💡';
     }
   }
-
-  // Особый алерт для ОЧЕНЬ крупных ордеров > $10,000
-  async sendBigOrderAlert(swap: TokenSwap, walletInfo: WalletInfo): Promise<void> {
-    try {
-      const walletStatus = swap.isNewWallet ? '🆕 НОВЫЙ' : '♻️ РЕАКТИВИРОВАН';
-      const walletAge = swap.isNewWallet ? 
-        `Создан ${swap.walletAge} часов назад` : 
-        `Неактивен ${swap.daysSinceLastActivity} дней`;
-      
-      const relatedWallets = walletInfo.relatedWallets && walletInfo.relatedWallets.length > 0 ?
-        `\n\n🔗 <b>Связанные кошельки:</b>\n${walletInfo.relatedWallets.map(w => `• ${this.truncateAddress(w)}`).join('\n')}` : '';
-      
-      const message = `
-🚨🚨🚨 <b>КРУПНЫЙ ОРДЕР НА ${this.formatNumber(swap.amountUSD)}!</b> 🚨🚨🚨
-
-💰 <b>Куплено:</b> ${this.formatNumber(swap.amount)} ${swap.tokenSymbol}
-📍 <b>Токен:</b> ${swap.tokenName}
-💳 <b>Кошелек:</b> <code>${swap.walletAddress}</code>
-📊 <b>Статус:</b> ${walletStatus}
-📌 <b>Возраст:</b> ${walletAge}
-🏪 <b>DEX:</b> ${swap.dex}
-⏰ <b>Время:</b> ${swap.timestamp.toUTCString()}
-${relatedWallets}
-
-🔍 <a href="https://solscan.io/account/${swap.walletAddress}">Кошелек</a> | <a href="https://birdeye.so/token/${swap.tokenAddress}">Токен</a>
-`;
-
-      await this.bot.sendMessage(this.userId, message, {
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-      });
-
-      this.logger.info(`Big order alert sent for ${swap.tokenSymbol} - ${swap.amountUSD}`);
-
-    } catch (error) {
-      this.logger.error('Error sending big order alert:', error);
-    }
-  }
-
-  // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
 
   private formatNumber(num: number): string {
     if (num >= 1_000_000) {
-      return `${(num / 1_000_000).toFixed(2)}M`;
+      return `${(num / 1_000_000).toFixed(1)}M`;
     } else if (num >= 1_000) {
-      return `${(num / 1_000).toFixed(0)}K`;
+      return `${(num / 1_000).toFixed(1)}K`;
     } else {
       return num.toFixed(0);
     }
   }
 
-  private formatNumberPadded(num: number): string {
-    const formatted = this.formatNumber(num);
-    return formatted.padStart(8);
-  }
-
   private formatTokenAmount(amount: number): string {
     if (amount >= 1_000_000_000) {
-      return `${(amount / 1_000_000_000).toFixed(1)}B`;
+      return `${(amount / 1_000_000_000).toFixed(2)}B`;
     } else if (amount >= 1_000_000) {
-      return `${(amount / 1_000_000).toFixed(1)}M`;
+      return `${(amount / 1_000_000).toFixed(2)}M`;
     } else if (amount >= 1_000) {
-      return `${(amount / 1_000).toFixed(1)}K`;
+      return `${(amount / 1_000).toFixed(2)}K`;
     } else {
-      return amount.toFixed(0);
+      return amount.toFixed(2);
     }
-  }
-
-  private formatTime(date: Date): string {
-    const hours = date.getUTCHours().toString().padStart(2, '0');
-    const minutes = date.getUTCMinutes().toString().padStart(2, '0');
-    return `${hours}:${minutes} UTC`;
   }
 
   private truncateAddress(address: string): string {
     return `${address.slice(0, 4)}...${address.slice(-4)}`;
   }
 
-  // Старые методы для обратной совместимости
-  async sendSmartMoneyReport(report: SmartMoneyReport): Promise<void> {
-    await this.sendTopInflowsReport(report);
-  }
-
-  async sendAlert(swap: TokenSwap, _walletInfo: WalletInfo, _tokenIsNew: boolean): Promise<void> {
-    await this.sendIndividualPurchase(swap);
+  private formatTime(timestamp: Date): string {
+    return timestamp.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'UTC'
+    });
   }
 }
