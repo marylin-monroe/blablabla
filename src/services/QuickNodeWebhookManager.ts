@@ -1,4 +1,4 @@
-// src/services/QuickNodeWebhookManager.ts - АДАПТАЦИЯ ПОД QUICKNODE
+// src/services/QuickNodeWebhookManager.ts - ИСПРАВЛЕНО
 import { Logger } from '../utils/Logger';
 
 interface QuickNodeStreamConfig {
@@ -29,6 +29,14 @@ export class QuickNodeWebhookManager {
     this.apiKey = process.env.QUICKNODE_API_KEY!;
   }
 
+  // Получает базовый URL для API (без /rpc)
+  private getApiBaseUrl(): string {
+    // Убираем слэш в конце и добавляем /api/v1
+    const baseUrl = this.httpUrl.replace(/\/$/, '');
+    // QuickNode API endpoint для streams
+    return baseUrl.replace(/\/[^\/]*$/, '') + '/api/v1';
+  }
+
   async createDEXMonitoringStream(webhookUrl: string): Promise<string> {
     try {
       this.logger.info('🔗 Creating QuickNode DEX monitoring stream...');
@@ -49,12 +57,15 @@ export class QuickNodeWebhookManager {
         }
       };
 
-      // QuickNode Streams API endpoint
-      const response = await fetch(`${this.httpUrl.replace('/rpc', '')}/streams`, {
+      // QuickNode Streams API endpoint - ИСПРАВЛЕНО
+      const apiUrl = `${this.getApiBaseUrl()}/streams`;
+      
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
+          'Authorization': `Bearer ${this.apiKey}`,
+          'User-Agent': 'Solana-Tracker-Bot/1.0'
         },
         body: JSON.stringify(streamConfig)
       });
@@ -86,10 +97,11 @@ export class QuickNodeWebhookManager {
 
       this.logger.info(`🗑️ Deleting QuickNode stream: ${streamId}`);
 
-      const response = await fetch(`${this.httpUrl.replace('/rpc', '')}/streams/${streamId}`, {
+      const response = await fetch(`${this.getApiBaseUrl()}/streams/${streamId}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`
+          'Authorization': `Bearer ${this.apiKey}`,
+          'User-Agent': 'Solana-Tracker-Bot/1.0'
         }
       });
 
@@ -107,10 +119,11 @@ export class QuickNodeWebhookManager {
 
   async listStreams(): Promise<QuickNodeStreamResponse[]> {
     try {
-      const response = await fetch(`${this.httpUrl.replace('/rpc', '')}/streams`, {
+      const response = await fetch(`${this.getApiBaseUrl()}/streams`, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`
+          'Authorization': `Bearer ${this.apiKey}`,
+          'User-Agent': 'Solana-Tracker-Bot/1.0'
         }
       });
 
@@ -245,10 +258,11 @@ export class QuickNodeWebhookManager {
         return { isActive: true, status: 'polling' };
       }
 
-      const response = await fetch(`${this.httpUrl.replace('/rpc', '')}/streams/${streamId}`, {
+      const response = await fetch(`${this.getApiBaseUrl()}/streams/${streamId}`, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`
+          'Authorization': `Bearer ${this.apiKey}`,
+          'User-Agent': 'Solana-Tracker-Bot/1.0'
         }
       });
 
