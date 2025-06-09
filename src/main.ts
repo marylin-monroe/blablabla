@@ -1,4 +1,4 @@
-// src/main.ts - ОБНОВЛЕННАЯ ВЕРСИЯ для QuickNode
+// src/main.ts - ОБНОВЛЕННАЯ ВЕРСИЯ с интегрированным Polling и SmartWalletLoader
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -10,6 +10,7 @@ import { FamilyWalletDetector } from './services/FamilyWalletDetector';
 import { WebhookServer } from './services/WebhookServer';
 import { QuickNodeWebhookManager } from './services/QuickNodeWebhookManager';
 import { Logger } from './utils/Logger';
+import { SmartWalletLoader } from './services/SmartWalletLoader';
 
 // Load environment variables
 dotenv.config();
@@ -25,6 +26,7 @@ class SmartMoneyBotRunner {
   private webhookServer: WebhookServer;
   private webhookManager: QuickNodeWebhookManager; 
   private logger: Logger;
+  private smartWalletLoader: SmartWalletLoader;
   
   private isRunning: boolean = false;
   private webhookId: string | null = null;
@@ -44,6 +46,9 @@ class SmartMoneyBotRunner {
       process.env.TELEGRAM_BOT_TOKEN!,
       process.env.TELEGRAM_USER_ID!
     );
+
+    // 🆕 ДОБАВЛЯЕМ SmartWalletLoader ПОСЛЕ ИНИЦИАЛИЗАЦИИ smDatabase
+    this.smartWalletLoader = new SmartWalletLoader(this.smDatabase, this.telegramNotifier);
 
     this.solanaMonitor = new SolanaMonitor(this.database, this.telegramNotifier);
     this.flowAnalyzer = new SmartMoneyFlowAnalyzer(this.smDatabase, this.telegramNotifier);
@@ -88,6 +93,10 @@ class SmartMoneyBotRunner {
       await this.smDatabase.init();
       this.logger.info('✅ Databases initialized');
 
+      // 🆕 ДОБАВЛЯЕМ ЗАГРУЗКУ КОШЕЛЬКОВ ИЗ КОНФИГА
+      const loadedWallets = await this.smartWalletLoader.loadWalletsFromConfig();
+      this.logger.info(`📁 Loaded ${loadedWallets} Smart Money wallets from config`);
+
       // Set running flag
       this.isRunning = true;
 
@@ -95,7 +104,10 @@ class SmartMoneyBotRunner {
       await this.webhookServer.start();
       this.logger.info('✅ Webhook server started');
 
-      // Create QuickNode webhook for DEX monitoring
+      // Set dependencies for QuickNodeWebhookManager (для polling режима)
+      this.webhookManager.setDependencies(this.smDatabase, this.telegramNotifier);
+
+      // Create QuickNode webhook or start polling
       await this.setupQuickNodeWebhook();
 
       // Send startup notification
@@ -125,6 +137,51 @@ class SmartMoneyBotRunner {
     }
   }
 
+  // 🆕 ДОБАВЛЯЕМ НОВЫЙ МЕТОД для ручного добавления кошельков
+  async addWalletManually(
+    address: string,
+    category: 'sniper' | 'hunter' | 'trader',
+    nickname: string,
+    description: string
+  ): Promise<boolean> {
+    try {
+      // Можно вызвать этот метод для добавления кошелька вручную
+      const success = await this.smartWalletLoader.addWalletToConfig(
+        address,
+        category,
+        nickname,
+        description,
+        {
+          winRate: 70,      // Дефолтные значения для ручного добавления
+          totalPnL: 50000,
+          totalTrades: 50,
+          avgTradeSize: 5000,
+          maxTradeSize: 20000,
+          performanceScore: 75
+        },
+        'manual'
+      );
+      
+      if (success) {
+        this.logger.info(`✅ Manually added wallet: ${nickname}`);
+        
+        // Отправляем уведомление
+        await this.telegramNotifier.sendCycleLog(
+          `➕ <b>Wallet Added Manually</b>\n\n` +
+          `🏷️ <b>Nickname:</b> <code>${nickname}</code>\n` +
+          `📍 <b>Address:</b> <code>${address}</code>\n` +
+          `🎯 <b>Category:</b> <code>${category}</code>\n` +
+          `📝 <b>Description:</b> ${description}\n\n` +
+          `✅ <b>Started monitoring!</b>`
+        );
+      }
+      return success;
+    } catch (error) {
+      this.logger.error('Error adding wallet manually:', error);
+      return false;
+    }
+  }
+
   private async setupQuickNodeWebhook(): Promise<void> {
     try {
       let webhookURL: string;
@@ -136,22 +193,41 @@ class SmartMoneyBotRunner {
         webhookURL = process.env.WEBHOOK_URL || 'http://localhost:3000/webhook';
       }
 
+      this.logger.info(`🔗 Setting up QuickNode monitoring with webhook: ${webhookURL}`);
+
       this.webhookId = await this.webhookManager.createDEXMonitoringStream(webhookURL);
       
-      this.logger.info('🎯 Smart Money DEX monitoring webhook created');
-      this.logger.info(`📡 Webhook URL: ${webhookURL}`);
+      if (this.webhookId === 'polling-mode') {
+        this.logger.info('🔄 QuickNode Streams unavailable - using integrated polling mode');
+        this.logger.info('📡 Polling Smart Money wallets every 15 seconds');
+        
+        // Получаем статистику polling
+        const pollingStats = this.webhookManager.getPollingStats();
+        this.logger.info(`🎯 Monitoring ${pollingStats.monitoredWallets} Smart Money wallets via polling`);
+      } else {
+        this.logger.info('🎯 Smart Money DEX monitoring webhook created successfully');
+        this.logger.info(`📡 Webhook URL: ${webhookURL}`);
+        this.logger.info(`🆔 Stream ID: ${this.webhookId}`);
+      }
+      
     } catch (error) {
       this.logger.error('❌ Failed to setup QuickNode webhook:', error);
       
-      // Не выбрасываем ошибку - продолжаем работу в polling режиме
-      this.logger.info('💡 Continuing in polling mode without real-time streams');
+      // Последняя попытка - принудительно запустить polling
+      this.logger.info('💡 Force starting polling mode as final fallback...');
+      this.webhookId = 'polling-mode';
     }
   }
 
   private async sendStartupNotification(): Promise<void> {
     try {
       const stats = await this.smDatabase.getWalletStats();
+      const pollingStats = this.webhookManager.getPollingStats();
       
+      const monitoringMode = this.webhookId === 'polling-mode' ? 
+        `🔄 <b>Polling Mode</b> (${pollingStats.monitoredWallets} wallets)` : 
+        '📡 <b>Real-time Webhooks</b>';
+
       await this.telegramNotifier.sendCycleLog(
         `🟢 <b>Advanced Smart Money Bot Online!</b>\n\n` +
         `📊 Monitoring <code>${stats.active}</code> Smart Money wallets\n` +
@@ -159,7 +235,7 @@ class SmartMoneyBotRunner {
         `💡 Hunters: <code>${stats.byCategory.hunter || 0}</code>\n` +
         `🐳 Traders: <code>${stats.byCategory.trader || 0}</code>\n` +
         `👥 Family Members: <code>${stats.familyMembers}</code>\n\n` +
-        `🎯 Real-time DEX monitoring: <b>ACTIVE</b>\n` +
+        `🎯 Monitoring: ${monitoringMode}\n` +
         `📈 Flow analysis: <b>Every hour</b>\n` +
         `🔥 Hot token detection: <b>Every 60min</b>\n` +
         `🔍 Wallet discovery: <b>Every 2 weeks</b>`
@@ -279,6 +355,12 @@ class SmartMoneyBotRunner {
         
         // Деактивируем неэффективные кошельки
         const deactivated = await this.deactivateIneffectiveWallets();
+        
+        // Обновляем список мониторинга для polling (если используется)
+        if (this.webhookId === 'polling-mode') {
+          // Перезапускаем polling с обновленным списком кошельков
+          this.webhookManager.setDependencies(this.smDatabase, this.telegramNotifier);
+        }
         
         // Отправляем статистику обновления
         const stats = await this.smDatabase.getWalletStats();
@@ -415,7 +497,7 @@ class SmartMoneyBotRunner {
       await this.webhookServer.stop();
     }
     
-    // Удаляем QuickNode webhook
+    // Удаляем QuickNode webhook или останавливаем polling
     if (this.webhookId && this.webhookId !== 'polling-mode') {
       try {
         await this.webhookManager.deleteStream(this.webhookId);
@@ -423,6 +505,9 @@ class SmartMoneyBotRunner {
       } catch (error) {
         this.logger.error('❌ Error deleting webhook:', error);
       }
+    } else if (this.webhookId === 'polling-mode') {
+      this.webhookManager.stopPollingMode();
+      this.logger.info('✅ Polling mode stopped');
     }
     
     // Закрываем базы данных
