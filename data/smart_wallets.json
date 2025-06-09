@@ -1,0 +1,92 @@
+{
+  "version": "1.0",
+  "lastUpdated": "2025-01-15",
+  "description": "Smart Money кошельки для мониторинга",
+  "totalWallets": 3,
+  
+  "wallets": [
+    {
+      "address": "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+      "category": "sniper",
+      "nickname": "SOL Sniper Pro",
+      "description": "Известный снайпер новых токенов на Solana",
+      "addedBy": "manual",
+      "addedAt": "2025-01-15",
+      "verified": true,
+      "enabled": true,
+      "metrics": {
+        "winRate": 78.5,
+        "totalPnL": 185000,
+        "totalTrades": 67,
+        "avgTradeSize": 8500,
+        "maxTradeSize": 35000,
+        "performanceScore": 85
+      },
+      "settings": {
+        "minTradeAlert": 5000,
+        "priority": "high"
+      }
+    },
+    
+    {
+      "address": "GrAkKfEpTKQuVHG2Y97Y2FF4i7y7Q5AHLK94JBy7Y5yv", 
+      "category": "hunter",
+      "nickname": "Altcoin Hunter",
+      "description": "Быстрый охотник за альткоинами",
+      "addedBy": "manual",
+      "addedAt": "2025-01-15", 
+      "verified": true,
+      "enabled": true,
+      "metrics": {
+        "winRate": 72.3,
+        "totalPnL": 120000,
+        "totalTrades": 128,
+        "avgTradeSize": 6500,
+        "maxTradeSize": 25000,
+        "performanceScore": 78
+      },
+      "settings": {
+        "minTradeAlert": 4000,
+        "priority": "medium"
+      }
+    },
+
+    {
+      "address": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+      "category": "trader", 
+      "nickname": "Whale Trader",
+      "description": "Крупный долгосрочный трейдер",
+      "addedBy": "manual",
+      "addedAt": "2025-01-15",
+      "verified": true,
+      "enabled": true,
+      "metrics": {
+        "winRate": 68.9,
+        "totalPnL": 520000,
+        "totalTrades": 89,
+        "avgTradeSize": 35000,
+        "maxTradeSize": 150000,
+        "performanceScore": 82
+      },
+      "settings": {
+        "minTradeAlert": 15000,
+        "priority": "high"
+      }
+    }
+  ],
+
+  "discovery": {
+    "autoDiscoveryEnabled": true,
+    "maxWallets": 150,
+    "minPerformanceScore": 75,
+    "discoveryInterval": "14d",
+    "lastDiscovery": null
+  },
+
+  "filters": {
+    "minWinRate": 65,
+    "minTotalPnL": 50000,
+    "minTotalTrades": 30,
+    "maxInactiveDays": 30
+  }
+}

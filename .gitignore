@@ -5,7 +5,6 @@ dist/
 .env.production
 .env.development
 *.log
-data/
 logs/
 .DS_Store
 
