@@ -1,4 +1,4 @@
-// src/main.ts - ОБНОВЛЕННАЯ ВЕРСИЯ с интегрированным Polling и SmartWalletLoader
+// src/main.ts - ОБНОВЛЕНО с отключенным FamilyWalletDetector
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -6,13 +6,12 @@ import { Database } from './services/Database';
 import { SmartMoneyDatabase } from './services/SmartMoneyDatabase';
 import { SmartMoneyFlowAnalyzer } from './services/SmartMoneyFlowAnalyzer';
 import { SmartWalletDiscovery } from './services/SmartWalletDiscovery';
-import { FamilyWalletDetector } from './services/FamilyWalletDetector';
+// import { FamilyWalletDetector } from './services/FamilyWalletDetector'; // ОТКЛЮЧЕН
 import { WebhookServer } from './services/WebhookServer';
 import { QuickNodeWebhookManager } from './services/QuickNodeWebhookManager';
 import { Logger } from './utils/Logger';
 import { SmartWalletLoader } from './services/SmartWalletLoader';
 
-// Load environment variables
 dotenv.config();
 
 class SmartMoneyBotRunner {
@@ -22,7 +21,7 @@ class SmartMoneyBotRunner {
   private telegramNotifier: TelegramNotifier;
   private flowAnalyzer: SmartMoneyFlowAnalyzer;
   private walletDiscovery: SmartWalletDiscovery;
-  private familyDetector: FamilyWalletDetector;
+  // private familyDetector: FamilyWalletDetector; // ОТКЛЮЧЕН
   private webhookServer: WebhookServer;
   private webhookManager: QuickNodeWebhookManager; 
   private logger: Logger;
@@ -35,10 +34,8 @@ class SmartMoneyBotRunner {
   constructor() {
     this.logger = Logger.getInstance();
     
-    // Validate required environment variables
     this.validateEnvironment();
 
-    // Initialize services
     this.database = new Database();
     this.smDatabase = new SmartMoneyDatabase();
     
@@ -47,13 +44,12 @@ class SmartMoneyBotRunner {
       process.env.TELEGRAM_USER_ID!
     );
 
-    // 🆕 ДОБАВЛЯЕМ SmartWalletLoader ПОСЛЕ ИНИЦИАЛИЗАЦИИ smDatabase
     this.smartWalletLoader = new SmartWalletLoader(this.smDatabase, this.telegramNotifier);
 
     this.solanaMonitor = new SolanaMonitor(this.database, this.telegramNotifier);
     this.flowAnalyzer = new SmartMoneyFlowAnalyzer(this.smDatabase, this.telegramNotifier);
     this.walletDiscovery = new SmartWalletDiscovery(this.smDatabase, this.database);
-    this.familyDetector = new FamilyWalletDetector(this.smDatabase, this.database);
+    // this.familyDetector = new FamilyWalletDetector(this.smDatabase, this.database); // ОТКЛЮЧЕН
     
     this.webhookServer = new WebhookServer(
       this.database, 
@@ -88,46 +84,39 @@ class SmartMoneyBotRunner {
     try {
       this.logger.info('🚀 Starting Advanced Smart Money Bot System...');
 
-      // Initialize databases
       await this.database.init();
       await this.smDatabase.init();
       this.logger.info('✅ Databases initialized');
 
-      // 🆕 ДОБАВЛЯЕМ ЗАГРУЗКУ КОШЕЛЬКОВ ИЗ КОНФИГА
       const loadedWallets = await this.smartWalletLoader.loadWalletsFromConfig();
       this.logger.info(`📁 Loaded ${loadedWallets} Smart Money wallets from config`);
 
-      // Set running flag
+      const syncResult = await this.smartWalletLoader.syncDatabaseWithConfig();
+      this.logger.info(`🔄 Database sync: ${syncResult.added} added, ${syncResult.updated} updated, ${syncResult.disabled} disabled`);
+
       this.isRunning = true;
 
-      // Start webhook server for real-time monitoring
       await this.webhookServer.start();
       this.logger.info('✅ Webhook server started');
 
-      // Set dependencies for QuickNodeWebhookManager (для polling режима)
       this.webhookManager.setDependencies(this.smDatabase, this.telegramNotifier);
 
-      // Create QuickNode webhook or start polling
       await this.setupQuickNodeWebhook();
 
-      // Send startup notification
       await this.sendStartupNotification();
 
-      // Start periodic Smart Money analysis
       this.startPeriodicAnalysis();
 
-      // Start periodic wallet discovery (every 2 weeks)
       this.startWalletDiscovery();
 
-      // Start family wallet detection (daily)
-      this.startFamilyDetection();
+      // this.startFamilyDetection(); // ОТКЛЮЧЕН
 
       this.logger.info('✅ Smart Money Bot started successfully!');
       this.logger.info('📊 Real-time DEX monitoring active');
       this.logger.info('🔍 Smart Money flow analysis running');
       this.logger.info('🎯 Advanced insider detection enabled');
+      this.logger.info('⚠️ Family wallet detection disabled');
 
-      // Keep the process alive
       process.on('SIGINT', () => this.shutdown());
       process.on('SIGTERM', () => this.shutdown());
 
@@ -137,41 +126,56 @@ class SmartMoneyBotRunner {
     }
   }
 
-  // 🆕 ДОБАВЛЯЕМ НОВЫЙ МЕТОД для ручного добавления кошельков
   async addWalletManually(
     address: string,
     category: 'sniper' | 'hunter' | 'trader',
     nickname: string,
-    description: string
+    description: string,
+    settings?: any
   ): Promise<boolean> {
     try {
-      // Можно вызвать этот метод для добавления кошелька вручную
+      const defaultMetrics = {
+        winRate: 70,
+        totalPnL: 50000,
+        totalTrades: 50,
+        avgTradeSize: category === 'trader' ? 15000 : category === 'hunter' ? 8000 : 5000,
+        maxTradeSize: category === 'trader' ? 50000 : category === 'hunter' ? 25000 : 15000,
+        performanceScore: 75
+      };
+
+      const defaultSettings = {
+        minTradeAlert: category === 'trader' ? 15000 : category === 'hunter' ? 5000 : 3000,
+        priority: 'medium',
+        enabled: true
+      };
+
+      const finalSettings = { ...defaultSettings, ...settings };
+
       const success = await this.smartWalletLoader.addWalletToConfig(
         address,
         category,
         nickname,
         description,
-        {
-          winRate: 70,      // Дефолтные значения для ручного добавления
-          totalPnL: 50000,
-          totalTrades: 50,
-          avgTradeSize: 5000,
-          maxTradeSize: 20000,
-          performanceScore: 75
-        },
+        defaultMetrics,
         'manual'
       );
       
+      if (success && settings) {
+        await this.smartWalletLoader.updateWalletSettings(address, settings);
+      }
+      
       if (success) {
-        this.logger.info(`✅ Manually added wallet: ${nickname}`);
+        this.logger.info(`✅ Manually added wallet: ${nickname} (${category})`);
         
-        // Отправляем уведомление
         await this.telegramNotifier.sendCycleLog(
           `➕ <b>Wallet Added Manually</b>\n\n` +
           `🏷️ <b>Nickname:</b> <code>${nickname}</code>\n` +
           `📍 <b>Address:</b> <code>${address}</code>\n` +
           `🎯 <b>Category:</b> <code>${category}</code>\n` +
-          `📝 <b>Description:</b> ${description}\n\n` +
+          `📝 <b>Description:</b> ${description}\n` +
+          `⚙️ <b>Min Alert:</b> <code>$${finalSettings.minTradeAlert}</code>\n` +
+          `🔥 <b>Priority:</b> <code>${finalSettings.priority}</code>\n` +
+          `✅ <b>Enabled:</b> <code>${finalSettings.enabled ? 'Yes' : 'No'}</code>\n\n` +
           `✅ <b>Started monitoring!</b>`
         );
       }
@@ -179,6 +183,58 @@ class SmartMoneyBotRunner {
     } catch (error) {
       this.logger.error('Error adding wallet manually:', error);
       return false;
+    }
+  }
+
+  async updateWalletSettings(address: string, settings: any): Promise<boolean> {
+    try {
+      const success = await this.smartWalletLoader.updateWalletSettings(address, settings);
+      
+      if (success) {
+        this.logger.info(`⚙️ Updated settings for wallet: ${address}`);
+        
+        const settingsText = Object.entries(settings)
+          .map(([key, value]) => `${key}: ${value}`)
+          .join(', ');
+        
+        await this.telegramNotifier.sendCycleLog(
+          `⚙️ <b>Wallet Settings Updated</b>\n\n` +
+          `📍 <b>Address:</b> <code>${address.slice(0, 8)}...${address.slice(-4)}</code>\n` +
+          `🔧 <b>Changes:</b> <code>${settingsText}</code>\n\n` +
+          `✅ <b>Settings applied!</b>`
+        );
+      }
+      
+      return success;
+    } catch (error) {
+      this.logger.error('Error updating wallet settings:', error);
+      return false;
+    }
+  }
+
+  async getWalletsByFilters(filters: any): Promise<any[]> {
+    try {
+      const wallets = await this.smDatabase.getWalletsBySettings(filters);
+      return wallets;
+    } catch (error) {
+      this.logger.error('Error getting wallets by filters:', error);
+      return [];
+    }
+  }
+
+  async exportConfiguration(): Promise<void> {
+    try {
+      await this.smartWalletLoader.exportConfigFromDatabase();
+      this.logger.info('📤 Configuration exported successfully');
+      
+      await this.telegramNotifier.sendCycleLog(
+        `📤 <b>Configuration Exported</b>\n\n` +
+        `✅ Wallet configuration exported from database to JSON file\n` +
+        `📝 File: <code>data/smart_wallets.json</code>\n` +
+        `🔄 Backup created automatically`
+      );
+    } catch (error) {
+      this.logger.error('Error exporting configuration:', error);
     }
   }
 
@@ -201,7 +257,6 @@ class SmartMoneyBotRunner {
         this.logger.info('🔄 QuickNode Streams unavailable - using integrated polling mode');
         this.logger.info('📡 Polling Smart Money wallets every 15 seconds');
         
-        // Получаем статистику polling
         const pollingStats = this.webhookManager.getPollingStats();
         this.logger.info(`🎯 Monitoring ${pollingStats.monitoredWallets} Smart Money wallets via polling`);
       } else {
@@ -213,7 +268,6 @@ class SmartMoneyBotRunner {
     } catch (error) {
       this.logger.error('❌ Failed to setup QuickNode webhook:', error);
       
-      // Последняя попытка - принудительно запустить polling
       this.logger.info('💡 Force starting polling mode as final fallback...');
       this.webhookId = 'polling-mode';
     }
@@ -223,6 +277,7 @@ class SmartMoneyBotRunner {
     try {
       const stats = await this.smDatabase.getWalletStats();
       const pollingStats = this.webhookManager.getPollingStats();
+      const loaderStats = this.smartWalletLoader.getStats();
       
       const monitoringMode = this.webhookId === 'polling-mode' ? 
         `🔄 <b>Polling Mode</b> (${pollingStats.monitoredWallets} wallets)` : 
@@ -230,15 +285,21 @@ class SmartMoneyBotRunner {
 
       await this.telegramNotifier.sendCycleLog(
         `🟢 <b>Advanced Smart Money Bot Online!</b>\n\n` +
-        `📊 Monitoring <code>${stats.active}</code> Smart Money wallets\n` +
+        `📊 Monitoring <code>${stats.active}</code> active wallets (<code>${stats.enabled}</code> enabled)\n` +
         `🔫 Snipers: <code>${stats.byCategory.sniper || 0}</code>\n` +
         `💡 Hunters: <code>${stats.byCategory.hunter || 0}</code>\n` +
-        `🐳 Traders: <code>${stats.byCategory.trader || 0}</code>\n` +
+        `🐳 Traders: <code>${stats.byCategory.trader || 0}</code>\n\n` +
+        `<b>Priority Distribution:</b>\n` +
+        `🔴 High: <code>${stats.byPriority.high || 0}</code>\n` +
+        `🟡 Medium: <code>${stats.byPriority.medium || 0}</code>\n` +
+        `🟢 Low: <code>${stats.byPriority.low || 0}</code>\n\n` +
         `👥 Family Members: <code>${stats.familyMembers}</code>\n\n` +
         `🎯 Monitoring: ${monitoringMode}\n` +
         `📈 Flow analysis: <b>Every hour</b>\n` +
         `🔥 Hot token detection: <b>Every 60min</b>\n` +
-        `🔍 Wallet discovery: <b>Every 2 weeks</b>`
+        `🔍 Wallet discovery: <b>Every 2 weeks</b>\n` +
+        `⚠️ Family detection: <b>Disabled</b>\n\n` +
+        `📝 Config updated: <code>${loaderStats?.lastUpdated}</code>`
       );
     } catch (error) {
       this.logger.error('Failed to send startup notification:', error);
@@ -246,7 +307,6 @@ class SmartMoneyBotRunner {
   }
 
   private startPeriodicAnalysis(): void {
-    // Анализ потоков каждый час
     const runFlowAnalysis = async () => {
       if (!this.isRunning) return;
       
@@ -255,10 +315,8 @@ class SmartMoneyBotRunner {
         
         const flowResult = await this.flowAnalyzer.analyzeSmartMoneyFlows();
         
-        // Отправляем уведомления
         await this.flowAnalyzer.sendFlowAnalysisNotifications(flowResult);
         
-        // Отправляем сводки по притокам/оттокам
         if (flowResult.inflows.length > 0) {
           const hourlyInflows = flowResult.inflows.filter(f => f.period === '1h');
           const dailyInflows = flowResult.inflows.filter(f => f.period === '24h');
@@ -285,7 +343,6 @@ class SmartMoneyBotRunner {
           }
         }
         
-        // Hot New Tokens разные сортировки
         if (flowResult.hotNewTokens.length > 0) {
           await this.telegramNotifier.sendHotNewTokensByWallets(flowResult.hotNewTokens);
           await this.telegramNotifier.sendHotNewTokensByAge(flowResult.hotNewTokens);
@@ -298,9 +355,8 @@ class SmartMoneyBotRunner {
       }
     };
 
-    // Запускаем анализ сразу и потом каждый час
     runFlowAnalysis();
-    const flowInterval = setInterval(runFlowAnalysis, 60 * 60 * 1000); // каждый час
+    const flowInterval = setInterval(runFlowAnalysis, 60 * 60 * 1000);
     this.intervalIds.push(flowInterval);
 
     this.logger.info('🔄 Periodic Smart Money flow analysis started');
@@ -318,51 +374,42 @@ class SmartMoneyBotRunner {
         let newWallets = 0;
         let updatedWallets = 0;
         
-        // Обрабатываем результаты
         for (const result of discoveryResults) {
           if (result.isSmartMoney && result.category) {
             const existingWallet = await this.smDatabase.getSmartWallet(result.address);
             
-            const smartWallet = {
-              address: result.address,
-              category: result.category,
-              winRate: result.metrics.winRate,
-              totalPnL: result.metrics.totalPnL,
-              totalTrades: result.metrics.totalTrades,
-              avgTradeSize: result.metrics.avgTradeSize,
-              maxTradeSize: result.metrics.maxTradeSize,
-              minTradeSize: result.metrics.minTradeSize,
-              sharpeRatio: result.metrics.sharpeRatio,
-              maxDrawdown: result.metrics.maxDrawdown,
-              lastActiveAt: result.metrics.recentActivity,
-              performanceScore: this.calculatePerformanceScore(result.metrics),
-              isActive: true,
-              isFamilyMember: result.familyConnections.length > 0,
-              familyAddresses: result.familyConnections,
-              earlyEntryRate: result.metrics.earlyEntryRate,
-              avgHoldTime: result.metrics.avgHoldTime
-            };
+            const success = await this.smartWalletLoader.addWalletToConfig(
+              result.address,
+              result.category,
+              `Auto ${result.category} ${result.address.slice(0, 8)}`,
+              `Automatically discovered ${result.category} wallet`,
+              {
+                winRate: result.metrics.winRate,
+                totalPnL: result.metrics.totalPnL,
+                totalTrades: result.metrics.totalTrades,
+                avgTradeSize: result.metrics.avgTradeSize,
+                maxTradeSize: result.metrics.maxTradeSize,
+                performanceScore: this.calculatePerformanceScore(result.metrics)
+              },
+              'discovery'
+            );
             
-            await this.smDatabase.saveSmartWallet(smartWallet);
-            
-            if (!existingWallet) {
-              newWallets++;
-            } else {
-              updatedWallets++;
+            if (success) {
+              if (!existingWallet) {
+                newWallets++;
+              } else {
+                updatedWallets++;
+              }
             }
           }
         }
         
-        // Деактивируем неэффективные кошельки
         const deactivated = await this.deactivateIneffectiveWallets();
         
-        // Обновляем список мониторинга для polling (если используется)
         if (this.webhookId === 'polling-mode') {
-          // Перезапускаем polling с обновленным списком кошельков
           this.webhookManager.setDependencies(this.smDatabase, this.telegramNotifier);
         }
         
-        // Отправляем статистику обновления
         const stats = await this.smDatabase.getWalletStats();
         await this.telegramNotifier.sendWalletDatabaseStats({
           ...stats,
@@ -376,55 +423,17 @@ class SmartMoneyBotRunner {
       }
     };
 
-    // Запускаем discovery через час после старта, потом каждые 2 недели
     setTimeout(() => {
       runWalletDiscovery();
-      const discoveryInterval = setInterval(runWalletDiscovery, 14 * 24 * 60 * 60 * 1000); // каждые 2 недели
+      const discoveryInterval = setInterval(runWalletDiscovery, 14 * 24 * 60 * 60 * 1000);
       this.intervalIds.push(discoveryInterval);
-    }, 60 * 60 * 1000); // через час после старта
+    }, 60 * 60 * 1000);
 
     this.logger.info('🔄 Periodic wallet discovery scheduled');
   }
 
-  private startFamilyDetection(): void {
-    const runFamilyDetection = async () => {
-      if (!this.isRunning) return;
-      
-      try {
-        this.logger.info('🕵 Starting family wallet detection...');
-        
-        const familyClusters = await this.familyDetector.detectFamilyWallets();
-        
-        // Отправляем уведомления о новых семейных кластерах
-        for (const cluster of familyClusters) {
-          await this.telegramNotifier.sendFamilyWalletAlert({
-            id: cluster.id,
-            wallets: cluster.wallets,
-            suspicionScore: cluster.suspicionScore,
-            detectionMethod: cluster.detectionMethods.join(', '),
-            totalPnL: cluster.totalPnL,
-            coordinationScore: cluster.coordinationScore
-          });
-          
-          // Пауза между уведомлениями
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-        
-        this.logger.info(`✅ Family detection completed: ${familyClusters.length} clusters found`);
-      } catch (error) {
-        this.logger.error('❌ Error in family detection:', error);
-      }
-    };
-
-    // Запускаем через 2 часа после старта, потом каждый день
-    setTimeout(() => {
-      runFamilyDetection();
-      const familyInterval = setInterval(runFamilyDetection, 24 * 60 * 60 * 1000); // каждый день
-      this.intervalIds.push(familyInterval);
-    }, 2 * 60 * 60 * 1000); // через 2 часа после старта
-
-    this.logger.info('🔄 Periodic family detection scheduled');
-  }
+  // FAMILY DETECTION ОТКЛЮЧЕН
+  // private startFamilyDetection(): void { ... }
 
   private async deactivateIneffectiveWallets(): Promise<number> {
     const activeWallets = await this.smDatabase.getAllActiveSmartWallets();
@@ -436,7 +445,6 @@ class SmartMoneyBotRunner {
       let shouldDeactivate = false;
       let reason = '';
       
-      // Проверяем критерии деактивации
       if (wallet.winRate < 55) {
         shouldDeactivate = true;
         reason = `Win rate dropped to ${wallet.winRate.toFixed(1)}%`;
@@ -454,6 +462,7 @@ class SmartMoneyBotRunner {
       
       if (shouldDeactivate) {
         await this.smDatabase.deactivateWallet(wallet.address, reason);
+        await this.smartWalletLoader.updateWalletSettings(wallet.address, { enabled: false });
         deactivatedCount++;
       }
     }
@@ -464,19 +473,10 @@ class SmartMoneyBotRunner {
   private calculatePerformanceScore(metrics: any): number {
     let score = 0;
     
-    // Win rate (0-30 points)
     score += Math.min(metrics.winRate * 0.5, 30);
-    
-    // PnL normalized (0-25 points)
     score += Math.min(Math.log10(Math.max(metrics.totalPnL, 1)) * 5, 25);
-    
-    // Trade count (0-15 points)
     score += Math.min(metrics.totalTrades * 0.3, 15);
-    
-    // Average trade size (0-15 points)
     score += Math.min(Math.log10(Math.max(metrics.avgTradeSize, 1)) * 3, 15);
-    
-    // Sharpe ratio (0-15 points)
     score += Math.min(metrics.sharpeRatio * 7.5, 15);
     
     return Math.min(score, 100);
@@ -487,17 +487,14 @@ class SmartMoneyBotRunner {
     
     this.isRunning = false;
     
-    // Останавливаем все интервалы
     for (const intervalId of this.intervalIds) {
       clearInterval(intervalId);
     }
     
-    // Закрываем webhook server
     if (this.webhookServer) {
       await this.webhookServer.stop();
     }
     
-    // Удаляем QuickNode webhook или останавливаем polling
     if (this.webhookId && this.webhookId !== 'polling-mode') {
       try {
         await this.webhookManager.deleteStream(this.webhookId);
@@ -510,7 +507,6 @@ class SmartMoneyBotRunner {
       this.logger.info('✅ Polling mode stopped');
     }
     
-    // Закрываем базы данных
     if (this.database) {
       await this.database.close();
     }
@@ -519,7 +515,6 @@ class SmartMoneyBotRunner {
       await this.smDatabase.close();
     }
     
-    // Отправляем уведомление об остановке
     try {
       await this.telegramNotifier.sendCycleLog('🔴 <b>Smart Money Bot stopped</b>');
     } catch (error) {
@@ -531,7 +526,6 @@ class SmartMoneyBotRunner {
   }
 }
 
-// Запуск бота
 const main = async () => {
   try {
     const bot = new SmartMoneyBotRunner();
@@ -542,16 +536,13 @@ const main = async () => {
   }
 };
 
-// Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
   process.exit(1);
 });
 
-// Start the application
 main();

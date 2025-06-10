@@ -1,4 +1,4 @@
-// src/services/SmartWalletLoader.ts
+// src/services/SmartWalletLoader.ts - исправлен addedAt на DATETIME
 import fs from 'fs';
 import path from 'path';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
@@ -12,21 +12,19 @@ interface WalletConfig {
   nickname: string;
   description: string;
   addedBy: 'manual' | 'discovery' | 'placeholder';
-  addedAt: string;
+  addedAt: string; // ISO datetime string
   verified: boolean;
-  metrics: {
-    winRate: number;
-    totalPnL: number;
-    totalTrades: number;
-    avgTradeSize: number;
-    maxTradeSize: number;
-    performanceScore: number;
-  };
-  settings: {
-    minTradeAlert: number;
-    priority: 'high' | 'medium' | 'low';
-    enabled: boolean; // Добавлено недостающее свойство
-  };
+  // metrics разложены
+  winRate: number;
+  totalPnL: number;
+  totalTrades: number;
+  avgTradeSize: number;
+  maxTradeSize: number;
+  performanceScore: number;
+  // settings разложены
+  minTradeAlert: number;
+  priority: 'high' | 'medium' | 'low';
+  enabled: boolean;
 }
 
 interface SmartWalletsConfig {
@@ -64,88 +62,89 @@ export class SmartWalletLoader {
     this.configPath = path.join(process.cwd(), 'data', 'smart_wallets.json');
   }
 
-  // Загрузка кошельков из конфиг файла при старте бота
   async loadWalletsFromConfig(): Promise<number> {
     try {
       this.logger.info('📁 Loading Smart Money wallets from config...');
 
-      // Создаем папку data если её нет
       const dataDir = path.dirname(this.configPath);
       if (!fs.existsSync(dataDir)) {
         fs.mkdirSync(dataDir, { recursive: true });
       }
 
-      // Проверяем существует ли конфиг файл
       if (!fs.existsSync(this.configPath)) {
         this.logger.info('📝 Config file not found, creating default...');
         await this.createDefaultConfig();
       }
 
-      // Читаем конфиг
       this.config = this.loadConfig();
       if (!this.config) {
         throw new Error('Failed to load config');
       }
 
-      // Загружаем кошельки в базу данных
       let loadedCount = 0;
+      let updatedCount = 0;
       let skippedCount = 0;
 
       for (const walletConfig of this.config.wallets) {
-        // Пропускаем placeholder'ы и отключенные кошельки
-        if (walletConfig.addedBy === 'placeholder' || !walletConfig.settings.enabled) {
+        if (walletConfig.addedBy === 'placeholder' || !walletConfig.enabled) {
           skippedCount++;
           continue;
         }
 
-        // Проверяем есть ли уже в базе
         const existingWallet = await this.smDatabase.getSmartWallet(walletConfig.address);
         
+        const smartWallet: SmartMoneyWallet = {
+          address: walletConfig.address,
+          category: walletConfig.category,
+          winRate: walletConfig.winRate,
+          totalPnL: walletConfig.totalPnL,
+          totalTrades: walletConfig.totalTrades,
+          avgTradeSize: walletConfig.avgTradeSize,
+          maxTradeSize: walletConfig.maxTradeSize,
+          minTradeSize: Math.min(walletConfig.avgTradeSize * 0.3, 1000),
+          lastActiveAt: this.parseDate(walletConfig.addedAt) || new Date(Date.now() - 24 * 60 * 60 * 1000),
+          performanceScore: walletConfig.performanceScore,
+          isActive: true,
+          sharpeRatio: 2.1,
+          maxDrawdown: 15.0,
+          volumeScore: 80,
+          isFamilyMember: false,
+          familyAddresses: [],
+          coordinationScore: 0,
+          stealthLevel: 60,
+          earlyEntryRate: walletConfig.category === 'sniper' ? 45 : 25,
+          avgHoldTime: walletConfig.category === 'trader' ? 72 : walletConfig.category === 'hunter' ? 12 : 4
+        };
+
+        const dbConfig = {
+          nickname: walletConfig.nickname,
+          description: walletConfig.description,
+          minTradeAlert: walletConfig.minTradeAlert,
+          priority: walletConfig.priority,
+          addedBy: walletConfig.addedBy,
+          verified: walletConfig.verified
+        };
+
+        await this.smDatabase.saveSmartWallet(smartWallet, dbConfig);
+
         if (!existingWallet) {
-          // Создаем SmartMoneyWallet объект
-          const smartWallet: SmartMoneyWallet = {
-            address: walletConfig.address,
-            category: walletConfig.category,
-            winRate: walletConfig.metrics.winRate,
-            totalPnL: walletConfig.metrics.totalPnL,
-            totalTrades: walletConfig.metrics.totalTrades,
-            avgTradeSize: walletConfig.metrics.avgTradeSize,
-            maxTradeSize: walletConfig.metrics.maxTradeSize,
-            minTradeSize: Math.min(walletConfig.metrics.avgTradeSize * 0.5, 1000),
-            lastActiveAt: new Date(Date.now() - 24 * 60 * 60 * 1000), // Вчера
-            performanceScore: walletConfig.metrics.performanceScore,
-            isActive: true,
-            sharpeRatio: 2.1,
-            maxDrawdown: 15.0,
-            volumeScore: 80,
-            isFamilyMember: false,
-            familyAddresses: [],
-            coordinationScore: 0,
-            stealthLevel: 60,
-            earlyEntryRate: 40,
-            avgHoldTime: 24
-          };
-
-          await this.smDatabase.saveSmartWallet(smartWallet);
           loadedCount++;
-
-          this.logger.info(`✅ Loaded wallet: ${walletConfig.nickname} (${walletConfig.category})`);
+          this.logger.info(`✅ Loaded new wallet: ${walletConfig.nickname} (${walletConfig.category})`);
         } else {
-          this.logger.info(`⏭️ Wallet already exists: ${walletConfig.nickname}`);
+          updatedCount++;
+          this.logger.info(`🔄 Updated wallet: ${walletConfig.nickname} (${walletConfig.category})`);
         }
       }
 
-      // Обновляем статистику в конфиге
-      this.config.totalWallets = this.config.wallets.filter(w => w.settings.enabled && w.addedBy !== 'placeholder').length;
+      this.config.totalWallets = this.config.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder').length;
       this.config.lastUpdated = new Date().toISOString().split('T')[0];
       await this.saveConfig();
 
-      this.logger.info(`📊 Loaded ${loadedCount} wallets, skipped ${skippedCount}`);
+      this.logger.info(`📊 Processing completed: ${loadedCount} new, ${updatedCount} updated, ${skippedCount} skipped`);
 
-      // Отправляем уведомление в Telegram
-      await this.sendLoadSummary(loadedCount, skippedCount);
+      await this.sendLoadSummary(loadedCount, updatedCount, skippedCount);
 
-      return loadedCount;
+      return loadedCount + updatedCount;
 
     } catch (error) {
       this.logger.error('❌ Error loading wallets from config:', error);
@@ -153,7 +152,6 @@ export class SmartWalletLoader {
     }
   }
 
-  // Добавление нового кошелька в конфиг (ручное или автоматическое)
   async addWalletToConfig(
     address: string,
     category: 'sniper' | 'hunter' | 'trader',
@@ -167,7 +165,6 @@ export class SmartWalletLoader {
         this.config = this.loadConfig();
       }
 
-      // Проверяем нет ли уже такого кошелька
       const existingIndex = this.config!.wallets.findIndex(w => w.address === address);
       
       const newWallet: WalletConfig = {
@@ -176,52 +173,43 @@ export class SmartWalletLoader {
         nickname,
         description,
         addedBy,
-        addedAt: new Date().toISOString().split('T')[0],
+        addedAt: new Date().toISOString(), // DATETIME format
         verified: addedBy === 'manual',
-        metrics: {
-          winRate: metrics.winRate || 0,
-          totalPnL: metrics.totalPnL || 0,
-          totalTrades: metrics.totalTrades || 0,
-          avgTradeSize: metrics.avgTradeSize || 0,
-          maxTradeSize: metrics.maxTradeSize || 0,
-          performanceScore: metrics.performanceScore || 0
-        },
-        settings: {
-          minTradeAlert: category === 'trader' ? 15000 : category === 'hunter' ? 5000 : 3000,
-          priority: metrics.performanceScore > 85 ? 'high' : 'medium',
-          enabled: true
-        }
+        winRate: metrics.winRate || 70,
+        totalPnL: metrics.totalPnL || 50000,
+        totalTrades: metrics.totalTrades || 50,
+        avgTradeSize: metrics.avgTradeSize || 5000,
+        maxTradeSize: metrics.maxTradeSize || 20000,
+        performanceScore: metrics.performanceScore || 75,
+        minTradeAlert: category === 'trader' ? 15000 : category === 'hunter' ? 5000 : 3000,
+        priority: (metrics.performanceScore || 75) > 85 ? 'high' : 'medium',
+        enabled: true
       };
 
       if (existingIndex >= 0) {
-        // Обновляем существующий
         this.config!.wallets[existingIndex] = newWallet;
         this.logger.info(`🔄 Updated wallet in config: ${nickname}`);
       } else {
-        // Добавляем новый
         this.config!.wallets.push(newWallet);
         this.logger.info(`➕ Added new wallet to config: ${nickname}`);
       }
 
-      // Обновляем метаданные
-      this.config!.totalWallets = this.config!.wallets.filter(w => w.settings.enabled && w.addedBy !== 'placeholder').length;
+      this.config!.totalWallets = this.config!.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder').length;
       this.config!.lastUpdated = new Date().toISOString().split('T')[0];
 
-      // Сохраняем конфиг
       await this.saveConfig();
 
-      // Добавляем в базу данных
       const smartWallet: SmartMoneyWallet = {
         address,
         category,
-        winRate: metrics.winRate || 0,
-        totalPnL: metrics.totalPnL || 0,
-        totalTrades: metrics.totalTrades || 0,
-        avgTradeSize: metrics.avgTradeSize || 0,
-        maxTradeSize: metrics.maxTradeSize || 0,
-        minTradeSize: Math.min(metrics.avgTradeSize * 0.5 || 1000, 1000),
+        winRate: newWallet.winRate,
+        totalPnL: newWallet.totalPnL,
+        totalTrades: newWallet.totalTrades,
+        avgTradeSize: newWallet.avgTradeSize,
+        maxTradeSize: newWallet.maxTradeSize,
+        minTradeSize: Math.min(newWallet.avgTradeSize * 0.3, 1000),
         lastActiveAt: new Date(),
-        performanceScore: metrics.performanceScore || 0,
+        performanceScore: newWallet.performanceScore,
         isActive: true,
         sharpeRatio: 2.1,
         maxDrawdown: 15.0,
@@ -230,11 +218,20 @@ export class SmartWalletLoader {
         familyAddresses: [],
         coordinationScore: 0,
         stealthLevel: 60,
-        earlyEntryRate: 40,
-        avgHoldTime: 24
+        earlyEntryRate: category === 'sniper' ? 45 : 25,
+        avgHoldTime: category === 'trader' ? 72 : category === 'hunter' ? 12 : 4
       };
 
-      await this.smDatabase.saveSmartWallet(smartWallet);
+      const dbConfig = {
+        nickname: newWallet.nickname,
+        description: newWallet.description,
+        minTradeAlert: newWallet.minTradeAlert,
+        priority: newWallet.priority,
+        addedBy: newWallet.addedBy,
+        verified: newWallet.verified
+      };
+
+      await this.smDatabase.saveSmartWallet(smartWallet, dbConfig);
 
       return true;
 
@@ -244,15 +241,192 @@ export class SmartWalletLoader {
     }
   }
 
-  // Получение настроек для конкретного кошелька
-  getWalletSettings(address: string): WalletConfig['settings'] | null {
+  async updateWalletSettings(
+    address: string, 
+    settings: {
+      enabled?: boolean;
+      priority?: 'high' | 'medium' | 'low';
+      minTradeAlert?: number;
+    }
+  ): Promise<boolean> {
+    try {
+      if (!this.config) {
+        this.config = this.loadConfig();
+      }
+
+      const walletIndex = this.config!.wallets.findIndex(w => w.address === address);
+      if (walletIndex >= 0) {
+        const wallet = this.config!.wallets[walletIndex];
+        
+        if (settings.enabled !== undefined) {
+          wallet.enabled = settings.enabled;
+        }
+        if (settings.priority !== undefined) {
+          wallet.priority = settings.priority;
+        }
+        if (settings.minTradeAlert !== undefined) {
+          wallet.minTradeAlert = settings.minTradeAlert;
+        }
+
+        await this.saveConfig();
+      }
+
+      await this.smDatabase.updateWalletSettings(address, settings);
+
+      this.logger.info(`⚙️ Updated settings for wallet: ${address}`);
+      return true;
+
+    } catch (error) {
+      this.logger.error('❌ Error updating wallet settings:', error);
+      return false;
+    }
+  }
+
+  async syncDatabaseWithConfig(): Promise<{
+    added: number;
+    updated: number;
+    disabled: number;
+  }> {
+    try {
+      this.logger.info('🔄 Syncing database with config...');
+
+      if (!this.config) {
+        this.config = this.loadConfig();
+      }
+
+      let added = 0, updated = 0, disabled = 0;
+
+      const dbWallets = await this.smDatabase.getAllActiveSmartWallets();
+      const dbAddresses = new Set(dbWallets.map(w => w.address));
+      const configAddresses = new Set(this.config!.wallets.map(w => w.address));
+
+      for (const walletConfig of this.config!.wallets) {
+        if (!dbAddresses.has(walletConfig.address) && walletConfig.enabled) {
+          const success = await this.addWalletToConfig(
+  walletConfig.address,
+  walletConfig.category,
+  walletConfig.nickname,
+  walletConfig.description,
+  {
+    winRate: walletConfig.winRate,
+    totalPnL: walletConfig.totalPnL,
+    totalTrades: walletConfig.totalTrades,
+    avgTradeSize: walletConfig.avgTradeSize,
+    maxTradeSize: walletConfig.maxTradeSize,
+    performanceScore: walletConfig.performanceScore
+  },
+  walletConfig.addedBy === 'placeholder' ? 'discovery' : walletConfig.addedBy  // <- ИСПРАВЛЕНИЕ
+);
+          if (success) added++;
+        } else if (dbAddresses.has(walletConfig.address)) {
+          await this.smDatabase.updateWalletSettings(walletConfig.address, {
+            enabled: walletConfig.enabled,
+            priority: walletConfig.priority,
+            minTradeAlert: walletConfig.minTradeAlert
+          });
+          updated++;
+        }
+      }
+
+      for (const dbWallet of dbWallets) {
+        if (!configAddresses.has(dbWallet.address)) {
+          await this.smDatabase.updateWalletSettings(dbWallet.address, { enabled: false });
+          disabled++;
+        }
+      }
+
+      this.logger.info(`✅ Sync completed: ${added} added, ${updated} updated, ${disabled} disabled`);
+
+      return { added, updated, disabled };
+
+    } catch (error) {
+      this.logger.error('❌ Error syncing database with config:', error);
+      return { added: 0, updated: 0, disabled: 0 };
+    }
+  }
+
+  async exportConfigFromDatabase(): Promise<void> {
+    try {
+      this.logger.info('📤 Exporting wallet config from database...');
+
+      const dbWallets = await this.smDatabase.getAllActiveSmartWallets();
+      const exportedWallets: WalletConfig[] = [];
+
+      for (const wallet of dbWallets) {
+        const settings = await this.smDatabase.getWalletSettings(wallet.address);
+        
+        if (settings) {
+          exportedWallets.push({
+            address: wallet.address,
+            category: wallet.category,
+            nickname: settings.nickname || `${wallet.category} ${wallet.address.slice(0, 8)}`,
+            description: settings.description || `Auto-exported ${wallet.category} wallet`,
+            addedBy: 'discovery',
+            addedAt: new Date().toISOString(), // DATETIME format
+            verified: true,
+            winRate: wallet.winRate,
+            totalPnL: wallet.totalPnL,
+            totalTrades: wallet.totalTrades,
+            avgTradeSize: wallet.avgTradeSize,
+            maxTradeSize: wallet.maxTradeSize,
+            performanceScore: wallet.performanceScore,
+            minTradeAlert: settings.minTradeAlert,
+            priority: settings.priority,
+            enabled: settings.enabled
+          });
+        }
+      }
+
+      const newConfig: SmartWalletsConfig = {
+        version: "2.0",
+        lastUpdated: new Date().toISOString().split('T')[0],
+        description: "Smart Money кошельки (экспорт из БД)",
+        totalWallets: exportedWallets.length,
+        wallets: exportedWallets,
+        discovery: this.config?.discovery || {
+          autoDiscoveryEnabled: true,
+          maxWallets: 150,
+          minPerformanceScore: 75,
+          discoveryInterval: "14d",
+          lastDiscovery: null
+        },
+        filters: this.config?.filters || {
+          minWinRate: 65,
+          minTotalPnL: 50000,
+          minTotalTrades: 30,
+          maxInactiveDays: 30
+        }
+      };
+
+      const backupPath = this.configPath.replace('.json', `_backup_${Date.now()}.json`);
+      if (fs.existsSync(this.configPath)) {
+        fs.copyFileSync(this.configPath, backupPath);
+        this.logger.info(`💾 Backup saved: ${backupPath}`);
+      }
+
+      fs.writeFileSync(this.configPath, JSON.stringify(newConfig, null, 2), 'utf8');
+      this.config = newConfig;
+
+      this.logger.info(`✅ Exported ${exportedWallets.length} wallets to config`);
+
+    } catch (error) {
+      this.logger.error('❌ Error exporting config from database:', error);
+    }
+  }
+
+  getWalletSettings(address: string): any | null {
     if (!this.config) return null;
     
     const wallet = this.config.wallets.find(w => w.address === address);
-    return wallet?.settings || null;
+    if (!wallet) return null;
+    
+    return {
+      minTradeAlert: wallet.minTradeAlert,
+      priority: wallet.priority,
+      enabled: wallet.enabled
+    };
   }
 
-  // Получение фильтров для discovery
   getDiscoveryFilters() {
     return this.config?.filters || {
       minWinRate: 65,
@@ -262,10 +436,23 @@ export class SmartWalletLoader {
     };
   }
 
-  // Создание дефолтного конфига
+  private parseDate(dateString: string): Date | null {
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) {
+        this.logger.warn(`Invalid date format: ${dateString}`);
+        return null;
+      }
+      return date;
+    } catch (error) {
+      this.logger.warn(`Error parsing date: ${dateString}`, error);
+      return null;
+    }
+  }
+
   private async createDefaultConfig(): Promise<void> {
     const defaultConfig: SmartWalletsConfig = {
-      version: "1.0",
+      version: "2.0",
       lastUpdated: new Date().toISOString().split('T')[0],
       description: "Smart Money кошельки для мониторинга",
       totalWallets: 0,
@@ -289,7 +476,6 @@ export class SmartWalletLoader {
     this.logger.info(`📝 Created default config at: ${this.configPath}`);
   }
 
-  // Чтение конфига из файла
   private loadConfig(): SmartWalletsConfig | null {
     try {
       const configData = fs.readFileSync(this.configPath, 'utf8');
@@ -300,10 +486,11 @@ export class SmartWalletLoader {
     }
   }
 
-  // Сохранение конфига в файл
   private async saveConfig(): Promise<void> {
     try {
       if (!this.config) return;
+      
+      this.config.lastUpdated = new Date().toISOString().split('T')[0];
       
       fs.writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), 'utf8');
       this.logger.debug('💾 Config saved successfully');
@@ -312,24 +499,35 @@ export class SmartWalletLoader {
     }
   }
 
-  // Отправка сводки загрузки в Telegram
-  private async sendLoadSummary(loaded: number, skipped: number): Promise<void> {
+  private async sendLoadSummary(loaded: number, updated: number, skipped: number): Promise<void> {
     try {
-      const totalEnabled = this.config?.wallets.filter(w => w.settings.enabled && w.addedBy !== 'placeholder').length || 0;
+      const totalEnabled = this.config?.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder').length || 0;
       const byCategory = {
-        sniper: this.config?.wallets.filter(w => w.settings.enabled && w.category === 'sniper').length || 0,
-        hunter: this.config?.wallets.filter(w => w.settings.enabled && w.category === 'hunter').length || 0,
-        trader: this.config?.wallets.filter(w => w.settings.enabled && w.category === 'trader').length || 0
+        sniper: this.config?.wallets.filter(w => w.enabled && w.category === 'sniper').length || 0,
+        hunter: this.config?.wallets.filter(w => w.enabled && w.category === 'hunter').length || 0,
+        trader: this.config?.wallets.filter(w => w.enabled && w.category === 'trader').length || 0
+      };
+
+      const byPriority = {
+        high: this.config?.wallets.filter(w => w.enabled && w.priority === 'high').length || 0,
+        medium: this.config?.wallets.filter(w => w.enabled && w.priority === 'medium').length || 0,
+        low: this.config?.wallets.filter(w => w.enabled && w.priority === 'low').length || 0
       };
 
       await this.telegramNotifier.sendCycleLog(
         `📁 <b>Smart Money Wallets Loaded</b>\n\n` +
-        `✅ <b>Loaded:</b> <code>${loaded}</code> wallets\n` +
+        `✅ <b>New:</b> <code>${loaded}</code> wallets\n` +
+        `🔄 <b>Updated:</b> <code>${updated}</code> wallets\n` +
         `⏭️ <b>Skipped:</b> <code>${skipped}</code> wallets\n` +
-        `📊 <b>Total Active:</b> <code>${totalEnabled}</code>\n\n` +
-        `🔫 <b>Snipers:</b> <code>${byCategory.sniper}</code>\n` +
-        `💡 <b>Hunters:</b> <code>${byCategory.hunter}</code>\n` +
-        `🐳 <b>Traders:</b> <code>${byCategory.trader}</code>\n\n` +
+        `📊 <b>Total Enabled:</b> <code>${totalEnabled}</code>\n\n` +
+        `<b>By Category:</b>\n` +
+        `🔫 Snipers: <code>${byCategory.sniper}</code>\n` +
+        `💡 Hunters: <code>${byCategory.hunter}</code>\n` +
+        `🐳 Traders: <code>${byCategory.trader}</code>\n\n` +
+        `<b>By Priority:</b>\n` +
+        `🔴 High: <code>${byPriority.high}</code>\n` +
+        `🟡 Medium: <code>${byPriority.medium}</code>\n` +
+        `🟢 Low: <code>${byPriority.low}</code>\n\n` +
         `📝 Config: <code>data/smart_wallets.json</code>`
       );
     } catch (error) {
@@ -337,16 +535,30 @@ export class SmartWalletLoader {
     }
   }
 
-  // Получение статистики
   getStats() {
     if (!this.config) return null;
 
+    const enabled = this.config.wallets.filter(w => w.enabled);
+    const byCategory = {
+      sniper: enabled.filter(w => w.category === 'sniper').length,
+      hunter: enabled.filter(w => w.category === 'hunter').length,
+      trader: enabled.filter(w => w.category === 'trader').length
+    };
+
+    const byPriority = {
+      high: enabled.filter(w => w.priority === 'high').length,
+      medium: enabled.filter(w => w.priority === 'medium').length,
+      low: enabled.filter(w => w.priority === 'low').length
+    };
+
     return {
       totalWallets: this.config.totalWallets,
-      enabledWallets: this.config.wallets.filter(w => w.settings.enabled).length,
+      enabledWallets: enabled.length,
       configPath: this.configPath,
       lastUpdated: this.config.lastUpdated,
-      discovery: this.config.discovery
+      discovery: this.config.discovery,
+      byCategory,
+      byPriority
     };
   }
 }

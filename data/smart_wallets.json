@@ -1,7 +1,7 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "lastUpdated": "2025-01-15",
-  "description": "Smart Money кошельки для мониторинга",
+  "description": "Smart Money кошельки для мониторинга (нормализованная схема)",
   "totalWallets": 3,
   
   "wallets": [
@@ -11,21 +11,17 @@
       "nickname": "SOL Sniper Pro",
       "description": "Известный снайпер новых токенов на Solana",
       "addedBy": "manual",
-      "addedAt": "2025-01-15",
+      "addedAt": "2025-01-15T10:30:00.000Z",
       "verified": true,
-      "enabled": true,
-      "metrics": {
-        "winRate": 78.5,
-        "totalPnL": 185000,
-        "totalTrades": 67,
-        "avgTradeSize": 8500,
-        "maxTradeSize": 35000,
-        "performanceScore": 85
-      },
-      "settings": {
-        "minTradeAlert": 5000,
-        "priority": "high"
-      }
+      "winRate": 78.5,
+      "totalPnL": 185000,
+      "totalTrades": 67,
+      "avgTradeSize": 8500,
+      "maxTradeSize": 35000,
+      "performanceScore": 85,
+      "minTradeAlert": 5000,
+      "priority": "high",
+      "enabled": true
     },
     
     {
@@ -34,21 +30,17 @@
       "nickname": "Altcoin Hunter",
       "description": "Быстрый охотник за альткоинами",
       "addedBy": "manual",
-      "addedAt": "2025-01-15", 
+      "addedAt": "2025-01-15T10:45:00.000Z", 
       "verified": true,
-      "enabled": true,
-      "metrics": {
-        "winRate": 72.3,
-        "totalPnL": 120000,
-        "totalTrades": 128,
-        "avgTradeSize": 6500,
-        "maxTradeSize": 25000,
-        "performanceScore": 78
-      },
-      "settings": {
-        "minTradeAlert": 4000,
-        "priority": "medium"
-      }
+      "winRate": 72.3,
+      "totalPnL": 120000,
+      "totalTrades": 128,
+      "avgTradeSize": 6500,
+      "maxTradeSize": 25000,
+      "performanceScore": 78,
+      "minTradeAlert": 4000,
+      "priority": "medium",
+      "enabled": true
     },
 
     {
@@ -57,21 +49,17 @@
       "nickname": "Whale Trader",
       "description": "Крупный долгосрочный трейдер",
       "addedBy": "manual",
-      "addedAt": "2025-01-15",
+      "addedAt": "2025-01-15T11:00:00.000Z",
       "verified": true,
-      "enabled": true,
-      "metrics": {
-        "winRate": 68.9,
-        "totalPnL": 520000,
-        "totalTrades": 89,
-        "avgTradeSize": 35000,
-        "maxTradeSize": 150000,
-        "performanceScore": 82
-      },
-      "settings": {
-        "minTradeAlert": 15000,
-        "priority": "high"
-      }
+      "winRate": 68.9,
+      "totalPnL": 520000,
+      "totalTrades": 89,
+      "avgTradeSize": 35000,
+      "maxTradeSize": 150000,
+      "performanceScore": 82,
+      "minTradeAlert": 15000,
+      "priority": "high",
+      "enabled": true
     }
   ],
 
