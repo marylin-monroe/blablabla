@@ -1,4 +1,4 @@
-// src/main.ts - ОБНОВЛЕНО с отключенным FamilyWalletDetector
+// src/main.ts - с автоопределением Render URL
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -46,7 +46,6 @@ class SmartMoneyBotRunner {
 
     this.solanaMonitor = new SolanaMonitor(this.database, this.telegramNotifier);
     
-    // ИСПРАВЛЕНО: добавлен параметр database в конструктор
     this.flowAnalyzer = new SmartMoneyFlowAnalyzer(this.smDatabase, this.telegramNotifier, this.database);
     
     this.walletDiscovery = new SmartWalletDiscovery(this.smDatabase, this.database);
@@ -80,6 +79,69 @@ class SmartMoneyBotRunner {
     this.logger.info('✅ Environment variables validated');
   }
 
+  // УМНОЕ ОПРЕДЕЛЕНИЕ RENDER URL
+  private detectRenderURL(): string {
+    // 1. Проверяем прямую переменную
+    if (process.env.RENDER_EXTERNAL_URL) {
+      this.logger.info(`🔗 Using RENDER_EXTERNAL_URL: ${process.env.RENDER_EXTERNAL_URL}`);
+      return process.env.RENDER_EXTERNAL_URL;
+    }
+
+    // 2. Проверяем RENDER_EXTERNAL_HOSTNAME (Render устанавливает автоматически)
+    if (process.env.RENDER_EXTERNAL_HOSTNAME) {
+      const renderUrl = `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`;
+      this.logger.info(`🔗 Detected from RENDER_EXTERNAL_HOSTNAME: ${renderUrl}`);
+      return renderUrl;
+    }
+
+    // 3. Проверяем RENDER_SERVICE_NAME + onrender.com
+    if (process.env.RENDER_SERVICE_NAME) {
+      const renderUrl = `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
+      this.logger.info(`🔗 Constructed from RENDER_SERVICE_NAME: ${renderUrl}`);
+      return renderUrl;
+    }
+
+    // 4. Проверяем наличие PORT (признак production на Render)
+    if (process.env.PORT && process.env.PORT !== '3000') {
+      // Пытаемся определить из git remote или других источников
+      const gitRemote = process.env.GIT_REMOTE_URL || '';
+      if (gitRemote.includes('github.com')) {
+        const repoMatch = gitRemote.match(/github\.com[/:](.*?)\/(.+?)(?:\.git)?$/);
+        if (repoMatch) {
+          const repoName = repoMatch[2].replace('.git', '');
+          const renderUrl = `https://${repoName}.onrender.com`;
+          this.logger.info(`🔗 Guessed from git repo: ${renderUrl}`);
+          return renderUrl;
+        }
+      }
+    }
+
+    // 5. Проверяем другие Render переменные
+    const renderVars = [
+      'RENDER_EXTERNAL_URL',
+      'RENDER_SERVICE_URL', 
+      'RENDER_APP_URL',
+      'RENDER_EXTERNAL_HOSTNAME'
+    ];
+
+    for (const varName of renderVars) {
+      if (process.env[varName]) {
+        const url = process.env[varName].startsWith('http') 
+          ? process.env[varName] 
+          : `https://${process.env[varName]}`;
+        this.logger.info(`🔗 Found in ${varName}: ${url}`);
+        return url;
+      }
+    }
+
+    // 6. Fallback - генерируем базовый URL
+    const fallbackUrl = 'https://smart-money-tracker.onrender.com';
+    this.logger.warn(`⚠️ Could not detect Render URL, using fallback: ${fallbackUrl}`);
+    this.logger.info('💡 Available env vars:', Object.keys(process.env).filter(k => k.includes('RENDER')));
+    
+    return fallbackUrl;
+  }
+
   async start(): Promise<void> {
     try {
       this.logger.info('🚀 Starting Advanced Smart Money Bot System...');
@@ -108,8 +170,6 @@ class SmartMoneyBotRunner {
       this.startPeriodicAnalysis();
 
       this.startWalletDiscovery();
-
-      // this.startFamilyDetection(); // ОТКЛЮЧЕН
 
       this.logger.info('✅ Smart Money Bot started successfully!');
       this.logger.info('📊 Real-time DEX monitoring active');
@@ -242,9 +302,9 @@ class SmartMoneyBotRunner {
     try {
       let webhookURL: string;
       
-      if (process.env.NODE_ENV === 'production') {
-        const renderUrl = process.env.RENDER_EXTERNAL_URL || 'https://your-app.onrender.com';
-        webhookURL = `${renderUrl}/webhook`;
+      // УМНОЕ ОПРЕДЕЛЕНИЕ URL
+      if (process.env.NODE_ENV === 'production' || process.env.PORT) {
+        webhookURL = `${this.detectRenderURL()}/webhook`;
       } else {
         webhookURL = process.env.WEBHOOK_URL || 'http://localhost:3000/webhook';
       }
@@ -431,9 +491,6 @@ class SmartMoneyBotRunner {
 
     this.logger.info('🔄 Periodic wallet discovery scheduled');
   }
-
-  // FAMILY DETECTION ОТКЛЮЧЕН
-  // private startFamilyDetection(): void { ... }
 
   private async deactivateIneffectiveWallets(): Promise<number> {
     const activeWallets = await this.smDatabase.getAllActiveSmartWallets();
