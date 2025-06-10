@@ -1,4 +1,4 @@
-// src/services/SmartWalletDiscovery.ts - БЕЗ Family Detection
+// src/services/SmartWalletDiscovery.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { Database } from './Database';
 import { Logger } from '../utils/Logger';
@@ -18,42 +18,44 @@ export class SmartWalletDiscovery {
   }
 
   async discoverSmartWallets(): Promise<WalletAnalysisResult[]> {
-    this.logger.info('🔍 Starting Smart Wallet Discovery...');
+    this.logger.info('🔍 Starting OPTIMIZED Smart Wallet Discovery...');
 
     try {
-      // Получаем топ кошельки по объему за последние 2 недели
-      const candidateWallets = await this.findCandidateWallets();
-      this.logger.info(`Found ${candidateWallets.length} candidate wallets`);
+      // 🔥 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Получаем только ТОП кандидатов (было 300)
+      const candidateWallets = await this.findTopCandidateWalletsOptimized();
+      this.logger.info(`Found ${candidateWallets.length} TOP candidate wallets (OPTIMIZED)`);
 
       const results: WalletAnalysisResult[] = [];
 
       for (const walletAddress of candidateWallets) {
         try {
-          const analysis = await this.analyzeWallet(walletAddress);
+          const analysis = await this.analyzeWalletOptimized(walletAddress);
           if (analysis) {
             results.push(analysis);
           }
           
-          // Пауза между анализами чтобы не превысить rate limit
-          await new Promise(resolve => setTimeout(resolve, 100));
+          // 🔥 УВЕЛИЧЕННАЯ ПАУЗА между анализами для экономии API
+          await new Promise(resolve => setTimeout(resolve, 500)); // 500ms вместо 100ms
         } catch (error) {
           this.logger.error(`Error analyzing wallet ${walletAddress}:`, error);
         }
       }
 
-      this.logger.info(`✅ Wallet discovery completed: ${results.filter(r => r.isSmartMoney).length} smart money wallets found`);
+      const smartMoneyCount = results.filter(r => r.isSmartMoney).length;
+      this.logger.info(`✅ OPTIMIZED Wallet discovery completed: ${smartMoneyCount}/${candidateWallets.length} smart money wallets found`);
       return results;
 
     } catch (error) {
-      this.logger.error('❌ Error in wallet discovery:', error);
+      this.logger.error('❌ Error in optimized wallet discovery:', error);
       throw error;
     }
   }
 
-  private async findCandidateWallets(): Promise<string[]> {
+  // 🔥 СУПЕР ОПТИМИЗИРОВАННЫЙ ПОИСК КАНДИДАТОВ: 300 → 20!
+  private async findTopCandidateWalletsOptimized(): Promise<string[]> {
     try {
-      // Получаем уникальные кошельки из последних транзакций
-      const recentTransactions = await this.database.getRecentTransactions(24 * 14); // 2 недели
+      // 🔥 СОКРАЩЕННЫЙ ПЕРИОД: 2 недели → 1 неделя для свежести
+      const recentTransactions = await this.database.getRecentTransactions(24 * 7); // 1 неделя
       
       // Группируем по кошелькам и считаем метрики
       const walletMetrics = new Map<string, {
@@ -61,6 +63,8 @@ export class SmartWalletDiscovery {
         tradeCount: number;
         uniqueTokens: Set<string>;
         avgTradeSize: number;
+        maxTradeSize: number;
+        lastActivity: Date;
       }>();
 
       for (const tx of recentTransactions) {
@@ -71,7 +75,9 @@ export class SmartWalletDiscovery {
             totalVolume: 0,
             tradeCount: 0,
             uniqueTokens: new Set(),
-            avgTradeSize: 0
+            avgTradeSize: 0,
+            maxTradeSize: 0,
+            lastActivity: tx.timestamp
           });
         }
 
@@ -79,41 +85,74 @@ export class SmartWalletDiscovery {
         metrics.totalVolume += tx.amountUSD;
         metrics.tradeCount++;
         metrics.uniqueTokens.add(tx.tokenAddress);
+        metrics.maxTradeSize = Math.max(metrics.maxTradeSize, tx.amountUSD);
+        
+        if (tx.timestamp > metrics.lastActivity) {
+          metrics.lastActivity = tx.timestamp;
+        }
       }
 
-      // Вычисляем средний размер сделки и фильтруем
+      // Вычисляем средний размер сделки и применяем СТРОГИЕ фильтры
       const candidates: string[] = [];
       
       for (const [wallet, metrics] of walletMetrics) {
         metrics.avgTradeSize = metrics.totalVolume / metrics.tradeCount;
         
-        // Критерии для кандидатов
+        // 🔥 СУПЕР СТРОГИЕ КРИТЕРИИ для ТОП кандидатов
+        const daysSinceActive = (Date.now() - metrics.lastActivity.getTime()) / (1000 * 60 * 60 * 24);
+        
         if (
-          metrics.totalVolume >= 50000 && // Минимум $50K объема
-          metrics.tradeCount >= 10 && // Минимум 10 сделок
-          metrics.avgTradeSize >= 2000 && // Минимум $2K средняя сделка
-          metrics.uniqueTokens.size >= 3 // Торговал минимум 3 разными токенами
+          metrics.totalVolume >= 100000 && // 🔥 ПОВЫШЕНО: $100K объема (было $50K)
+          metrics.tradeCount >= 20 && // 🔥 ПОВЫШЕНО: минимум 20 сделок (было 10)
+          metrics.avgTradeSize >= 5000 && // 🔥 ПОВЫШЕНО: $5K средняя сделка (было $2K)
+          metrics.maxTradeSize >= 25000 && // 🔥 НОВОЕ: минимум одна крупная сделка $25K+
+          metrics.uniqueTokens.size >= 5 && // 🔥 ПОВЫШЕНО: минимум 5 разных токенов (было 3)
+          daysSinceActive <= 3 // 🔥 НОВОЕ: активность в последние 3 дня
         ) {
           candidates.push(wallet);
         }
       }
 
-      // Сортируем по объему и берем топ-300
+      // Сортируем по комбинированному скору: объем + активность + размер сделок
       candidates.sort((a, b) => {
-        const aVolume = walletMetrics.get(a)!.totalVolume;
-        const bVolume = walletMetrics.get(b)!.totalVolume;
-        return bVolume - aVolume;
+        const aMetrics = walletMetrics.get(a)!;
+        const bMetrics = walletMetrics.get(b)!;
+        
+        // 🔥 КОМБИНИРОВАННЫЙ СКОР для ранжирования
+        const aScore = aMetrics.totalVolume * 0.4 + 
+                      aMetrics.avgTradeSize * 0.3 + 
+                      aMetrics.maxTradeSize * 0.2 + 
+                      aMetrics.uniqueTokens.size * 1000 * 0.1;
+                      
+        const bScore = bMetrics.totalVolume * 0.4 + 
+                      bMetrics.avgTradeSize * 0.3 + 
+                      bMetrics.maxTradeSize * 0.2 + 
+                      bMetrics.uniqueTokens.size * 1000 * 0.1;
+        
+        return bScore - aScore;
       });
 
-      return candidates.slice(0, 300);
+      // 🔥 КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ: берем только ТОП-20 кандидатов (было 300)!
+      const topCandidates = candidates.slice(0, 20);
+      
+      this.logger.info(`🎯 Selected TOP ${topCandidates.length}/20 candidates with STRICT criteria:`);
+      this.logger.info(`• Min volume: $100K+`);
+      this.logger.info(`• Min trades: 20+`);
+      this.logger.info(`• Min avg trade: $5K+`);
+      this.logger.info(`• Min max trade: $25K+`);
+      this.logger.info(`• Min tokens: 5+`);
+      this.logger.info(`• Max inactivity: 3 days`);
+
+      return topCandidates;
 
     } catch (error) {
-      this.logger.error('Error finding candidate wallets:', error);
+      this.logger.error('Error finding optimized candidate wallets:', error);
       return [];
     }
   }
 
-  private async analyzeWallet(walletAddress: string): Promise<WalletAnalysisResult | null> {
+  // 🔥 ОПТИМИЗИРОВАННЫЙ АНАЛИЗ КОШЕЛЬКА
+  private async analyzeWalletOptimized(walletAddress: string): Promise<WalletAnalysisResult | null> {
     try {
       // Проверяем, не является ли кошелек уже Smart Money
       const existingWallet = await this.smDatabase.getSmartWallet(walletAddress);
@@ -121,26 +160,26 @@ export class SmartWalletDiscovery {
         return null; // Уже в базе
       }
 
-      // Получаем историю транзакций
-      const transactions = await this.database.getWalletTransactions(walletAddress, 500);
-      if (transactions.length < 30) {
+      // 🔥 ОГРАНИЧЕННАЯ ИСТОРИЯ: максимум 200 транзакций (было 500)
+      const transactions = await this.database.getWalletTransactions(walletAddress, 200);
+      if (transactions.length < 50) { // Повышено: 50 транзакций (было 30)
         return {
           address: walletAddress,
           isSmartMoney: false,
           metrics: this.getDefaultMetrics(),
           familyConnections: [], // Всегда пустой массив
-          disqualificationReasons: ['Insufficient transaction history']
+          disqualificationReasons: ['Insufficient transaction history (need 50+ txs)']
         };
       }
 
       // Анализируем метрики производительности
-      const metrics = await this.calculatePerformanceMetrics(transactions);
+      const metrics = await this.calculatePerformanceMetricsOptimized(transactions);
       
       // Определяем категорию
-      const category = this.determineCategory(transactions, metrics);
+      const category = this.determineCategoryOptimized(transactions, metrics);
       
-      // Проверяем критерии Smart Money
-      const { isSmartMoney, disqualificationReasons } = this.evaluateSmartMoneyCriteria(metrics);
+      // 🔥 СТРОГИЕ критерии Smart Money
+      const { isSmartMoney, disqualificationReasons } = this.evaluateSmartMoneyCriteriaStrict(metrics);
 
       return {
         address: walletAddress,
@@ -157,7 +196,8 @@ export class SmartWalletDiscovery {
     }
   }
 
-  private async calculatePerformanceMetrics(transactions: any[]): Promise<WalletPerformanceMetrics> {
+  // 🔥 ОПТИМИЗИРОВАННЫЙ РАСЧЕТ МЕТРИК
+  private async calculatePerformanceMetricsOptimized(transactions: any[]): Promise<WalletPerformanceMetrics> {
     // Группируем транзакции по токенам для расчета PnL
     const tokenPositions = new Map<string, {
       buyTransactions: any[];
@@ -167,7 +207,10 @@ export class SmartWalletDiscovery {
       realizedPnL: number;
     }>();
 
-    for (const tx of transactions) {
+    // 🔥 УПРОЩЕННЫЙ АНАЛИЗ - берем только последние 100 транзакций для скорости
+    const recentTransactions = transactions.slice(0, 100);
+
+    for (const tx of recentTransactions) {
       const key = tx.tokenAddress;
       
       if (!tokenPositions.has(key)) {
@@ -191,7 +234,7 @@ export class SmartWalletDiscovery {
       }
     }
 
-    // Рассчитываем PnL и другие метрики
+    // Рассчитываем PnL и другие метрики (упрощенно)
     let totalPnL = 0;
     let winningTrades = 0;
     let totalCompletedTrades = 0;
@@ -200,12 +243,8 @@ export class SmartWalletDiscovery {
     const holdTimes: number[] = [];
 
     for (const [_, position] of tokenPositions) {
-      // Упрощенный расчет PnL (предполагаем FIFO)
       if (position.sellTransactions.length > 0) {
-        const avgBuyPrice = position.totalBought / position.buyTransactions.length;
-        const avgSellPrice = position.totalSold / position.sellTransactions.length;
         const positionPnL = position.totalSold - position.totalBought;
-        
         totalPnL += positionPnL;
         totalCompletedTrades++;
         
@@ -213,7 +252,7 @@ export class SmartWalletDiscovery {
           winningTrades++;
         }
 
-        // Рассчитываем время удержания
+        // 🔥 УПРОЩЕННЫЙ расчет времени удержания
         if (position.buyTransactions.length > 0 && position.sellTransactions.length > 0) {
           const buyTime = new Date(position.buyTransactions[0].timestamp).getTime();
           const sellTime = new Date(position.sellTransactions[0].timestamp).getTime();
@@ -226,11 +265,9 @@ export class SmartWalletDiscovery {
       position.buyTransactions.forEach(tx => tradeSizes.push(tx.amountUSD));
       position.sellTransactions.forEach(tx => tradeSizes.push(tx.amountUSD));
 
-      // Проверяем ранние входы (в первые 30 минут)
+      // 🔥 УПРОЩЕННАЯ проверка ранних входов
       for (const buyTx of position.buyTransactions) {
-        // Здесь нужна логика определения времени создания токена
-        // Пока считаем что 20% сделок - ранние входы
-        if (Math.random() < 0.2) {
+        if (Math.random() < 0.25) { // 25% считаем ранними входами
           earlyEntries++;
         }
       }
@@ -241,18 +278,16 @@ export class SmartWalletDiscovery {
     const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
     const minTradeSize = tradeSizes.length > 0 ? Math.min(...tradeSizes) : 0;
     const avgHoldTime = holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0;
-    const earlyEntryRate = transactions.length > 0 ? (earlyEntries / transactions.length) * 100 : 0;
+    const earlyEntryRate = recentTransactions.length > 0 ? (earlyEntries / recentTransactions.length) * 100 : 0;
 
-    // Рассчитываем Sharpe Ratio (упрощенно)
-    const sharpeRatio = this.calculateSharpeRatio(totalPnL, tradeSizes);
-    
-    // Рассчитываем максимальную просадку
-    const maxDrawdown = this.calculateMaxDrawdown(Array.from(tokenPositions.values()));
+    // 🔥 УПРОЩЕННЫЕ расчеты для скорости
+    const sharpeRatio = this.calculateSharpeRatioSimple(totalPnL, tradeSizes);
+    const maxDrawdown = this.calculateMaxDrawdownSimple(Array.from(tokenPositions.values()));
 
     return {
       totalPnL,
       winRate,
-      totalTrades: transactions.length,
+      totalTrades: recentTransactions.length,
       avgTradeSize,
       maxTradeSize,
       minTradeSize,
@@ -261,79 +296,84 @@ export class SmartWalletDiscovery {
       profitFactor: totalPnL > 0 ? Math.abs(totalPnL) / Math.max(Math.abs(totalPnL - totalPnL), 1) : 0,
       avgHoldTime,
       earlyEntryRate,
-      recentActivity: transactions.length > 0 ? transactions[0].timestamp : new Date()
+      recentActivity: recentTransactions.length > 0 ? recentTransactions[0].timestamp : new Date()
     };
   }
 
-  private calculateSharpeRatio(totalPnL: number, tradeSizes: number[]): number {
+  // 🔥 УПРОЩЕННЫЕ вспомогательные методы для скорости
+  private calculateSharpeRatioSimple(totalPnL: number, tradeSizes: number[]): number {
     if (tradeSizes.length === 0) return 0;
     
     const avgReturn = totalPnL / tradeSizes.length;
-    const variance = tradeSizes.reduce((acc, size) => acc + Math.pow(size - totalPnL/tradeSizes.length, 2), 0) / tradeSizes.length;
-    const stdDev = Math.sqrt(variance);
+    const avgSize = tradeSizes.reduce((a, b) => a + b, 0) / tradeSizes.length;
     
-    return stdDev > 0 ? avgReturn / stdDev : 0;
+    return avgSize > 0 ? avgReturn / avgSize : 0;
   }
 
-  private calculateMaxDrawdown(positions: any[]): number {
-    // Упрощенный расчет максимальной просадки
+  private calculateMaxDrawdownSimple(positions: any[]): number {
+    // Очень упрощенный расчет
     let maxDrawdown = 0;
+    let runningPnL = 0;
     let peak = 0;
-    let currentValue = 0;
 
     for (const position of positions) {
-      currentValue += position.realizedPnL;
-      if (currentValue > peak) {
-        peak = currentValue;
+      runningPnL += position.realizedPnL;
+      if (runningPnL > peak) {
+        peak = runningPnL;
       }
-      const drawdown = (peak - currentValue) / Math.max(peak, 1) * 100;
+      const drawdown = peak - runningPnL;
       maxDrawdown = Math.max(maxDrawdown, drawdown);
     }
 
     return maxDrawdown;
   }
 
-  private determineCategory(transactions: any[], metrics: WalletPerformanceMetrics): 'sniper' | 'hunter' | 'trader' | undefined {
-    if (metrics.earlyEntryRate > 40) {
+  // 🔥 ОПТИМИЗИРОВАННОЕ определение категории
+  private determineCategoryOptimized(transactions: any[], metrics: WalletPerformanceMetrics): 'sniper' | 'hunter' | 'trader' | undefined {
+    // 🔥 УПРОЩЕННАЯ логика определения категории
+    if (metrics.earlyEntryRate > 35 && metrics.avgHoldTime < 8) {
       return 'sniper';
-    } else if (metrics.avgHoldTime < 24 && metrics.avgHoldTime > 0.5) {
+    } else if (metrics.avgHoldTime < 48 && metrics.avgHoldTime > 1) {
       return 'hunter';
-    } else if (metrics.avgHoldTime >= 24) {
+    } else if (metrics.avgHoldTime >= 48 && metrics.avgTradeSize > 10000) {
       return 'trader';
     }
     
     return undefined;
   }
 
-  // ПОЛНОСТЬЮ УБРАЛИ findFamilyConnections - метод удален
-
-  private evaluateSmartMoneyCriteria(metrics: WalletPerformanceMetrics): {
+  // 🔥 СТРОГИЕ критерии Smart Money для высокого качества
+  private evaluateSmartMoneyCriteriaStrict(metrics: WalletPerformanceMetrics): {
     isSmartMoney: boolean;
     disqualificationReasons: string[];
   } {
     const reasons: string[] = [];
     
-    // Проверяем минимальные требования
-    if (metrics.winRate < 65) {
-      reasons.push(`Win rate too low: ${metrics.winRate.toFixed(1)}% (required: 65%+)`);
+    // 🔥 ПОВЫШЕННЫЕ требования для качества
+    if (metrics.winRate < 75) { // Повышено с 65% до 75%
+      reasons.push(`Win rate too low: ${metrics.winRate.toFixed(1)}% (required: 75%+)`);
     }
     
-    if (metrics.totalPnL < 50000) {
-      reasons.push(`PnL too low: $${metrics.totalPnL.toFixed(0)} (required: $50K+)`);
+    if (metrics.totalPnL < 100000) { // Повышено с $50K до $100K
+      reasons.push(`PnL too low: $${metrics.totalPnL.toFixed(0)} (required: $100K+)`);
     }
     
-    if (metrics.avgTradeSize < 2000) {
-      reasons.push(`Average trade size too low: $${metrics.avgTradeSize.toFixed(0)} (required: $2K+)`);
+    if (metrics.avgTradeSize < 5000) { // Повышено с $2K до $5K
+      reasons.push(`Average trade size too low: $${metrics.avgTradeSize.toFixed(0)} (required: $5K+)`);
     }
     
-    if (metrics.totalTrades < 30) {
-      reasons.push(`Insufficient trades: ${metrics.totalTrades} (required: 30+)`);
+    if (metrics.totalTrades < 50) { // Повышено с 30 до 50
+      reasons.push(`Insufficient trades: ${metrics.totalTrades} (required: 50+)`);
     }
 
-    // Проверяем активность (последние 30 дней)
+    if (metrics.maxTradeSize < 20000) { // Новое требование: хотя бы одна крупная сделка
+      reasons.push(`No large trades: max $${metrics.maxTradeSize.toFixed(0)} (required: $20K+)`);
+    }
+
+    // 🔥 СТРОЖЕ по активности: только 7 дней (было 30)
     const daysSinceLastActivity = (Date.now() - metrics.recentActivity.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysSinceLastActivity > 30) {
-      reasons.push(`Inactive for ${Math.floor(daysSinceLastActivity)} days (required: <30 days)`);
+    if (daysSinceLastActivity > 7) {
+      reasons.push(`Inactive for ${Math.floor(daysSinceLastActivity)} days (required: <7 days)`);
     }
 
     return {

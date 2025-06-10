@@ -1,4 +1,4 @@
-// src/main.ts - с автоопределением Render URL
+// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -59,7 +59,7 @@ class SmartMoneyBotRunner {
     
     this.webhookManager = new QuickNodeWebhookManager();
 
-    this.logger.info('✅ Smart Money Bot services initialized successfully');
+    this.logger.info('✅ Smart Money Bot services initialized (OPTIMIZED)');
   }
 
   private validateEnvironment(): void {
@@ -79,31 +79,25 @@ class SmartMoneyBotRunner {
     this.logger.info('✅ Environment variables validated');
   }
 
-  // УМНОЕ ОПРЕДЕЛЕНИЕ RENDER URL
   private detectRenderURL(): string {
-    // 1. Проверяем прямую переменную
     if (process.env.RENDER_EXTERNAL_URL) {
       this.logger.info(`🔗 Using RENDER_EXTERNAL_URL: ${process.env.RENDER_EXTERNAL_URL}`);
       return process.env.RENDER_EXTERNAL_URL;
     }
 
-    // 2. Проверяем RENDER_EXTERNAL_HOSTNAME (Render устанавливает автоматически)
     if (process.env.RENDER_EXTERNAL_HOSTNAME) {
       const renderUrl = `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`;
       this.logger.info(`🔗 Detected from RENDER_EXTERNAL_HOSTNAME: ${renderUrl}`);
       return renderUrl;
     }
 
-    // 3. Проверяем RENDER_SERVICE_NAME + onrender.com
     if (process.env.RENDER_SERVICE_NAME) {
       const renderUrl = `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
       this.logger.info(`🔗 Constructed from RENDER_SERVICE_NAME: ${renderUrl}`);
       return renderUrl;
     }
 
-    // 4. Проверяем наличие PORT (признак production на Render)
     if (process.env.PORT && process.env.PORT !== '3000') {
-      // Пытаемся определить из git remote или других источников
       const gitRemote = process.env.GIT_REMOTE_URL || '';
       if (gitRemote.includes('github.com')) {
         const repoMatch = gitRemote.match(/github\.com[/:](.*?)\/(.+?)(?:\.git)?$/);
@@ -116,7 +110,6 @@ class SmartMoneyBotRunner {
       }
     }
 
-    // 5. Проверяем другие Render переменные
     const renderVars = [
       'RENDER_EXTERNAL_URL',
       'RENDER_SERVICE_URL', 
@@ -134,7 +127,6 @@ class SmartMoneyBotRunner {
       }
     }
 
-    // 6. Fallback - генерируем базовый URL
     const fallbackUrl = 'https://smart-money-tracker.onrender.com';
     this.logger.warn(`⚠️ Could not detect Render URL, using fallback: ${fallbackUrl}`);
     this.logger.info('💡 Available env vars:', Object.keys(process.env).filter(k => k.includes('RENDER')));
@@ -144,7 +136,7 @@ class SmartMoneyBotRunner {
 
   async start(): Promise<void> {
     try {
-      this.logger.info('🚀 Starting Advanced Smart Money Bot System...');
+      this.logger.info('🚀 Starting OPTIMIZED Smart Money Bot System...');
 
       await this.database.init();
       await this.smDatabase.init();
@@ -167,14 +159,14 @@ class SmartMoneyBotRunner {
 
       await this.sendStartupNotification();
 
-      this.startPeriodicAnalysis();
+      this.startPeriodicAnalysisOptimized();
 
-      this.startWalletDiscovery();
+      this.startWalletDiscoveryOptimized();
 
-      this.logger.info('✅ Smart Money Bot started successfully!');
-      this.logger.info('📊 Real-time DEX monitoring active');
-      this.logger.info('🔍 Smart Money flow analysis running');
-      this.logger.info('🎯 Advanced insider detection enabled');
+      this.logger.info('✅ OPTIMIZED Smart Money Bot started successfully!');
+      this.logger.info('📊 Real-time DEX monitoring active (OPTIMIZED)');
+      this.logger.info('🔍 Smart Money flow analysis running (4h intervals)');
+      this.logger.info('🎯 Advanced insider detection enabled (LIMITED)');
       this.logger.info('⚠️ Family wallet detection disabled');
 
       process.on('SIGINT', () => this.shutdown());
@@ -302,23 +294,22 @@ class SmartMoneyBotRunner {
     try {
       let webhookURL: string;
       
-      // УМНОЕ ОПРЕДЕЛЕНИЕ URL
       if (process.env.NODE_ENV === 'production' || process.env.PORT) {
         webhookURL = `${this.detectRenderURL()}/webhook`;
       } else {
         webhookURL = process.env.WEBHOOK_URL || 'http://localhost:3000/webhook';
       }
 
-      this.logger.info(`🔗 Setting up QuickNode monitoring with webhook: ${webhookURL}`);
+      this.logger.info(`🔗 Setting up OPTIMIZED QuickNode monitoring with webhook: ${webhookURL}`);
 
       this.webhookId = await this.webhookManager.createDEXMonitoringStream(webhookURL);
       
       if (this.webhookId === 'polling-mode') {
-        this.logger.info('🔄 QuickNode Streams unavailable - using integrated polling mode');
-        this.logger.info('📡 Polling Smart Money wallets every 15 seconds');
+        this.logger.info('🔄 QuickNode Streams unavailable - using OPTIMIZED polling mode');
+        this.logger.info('📡 Polling Smart Money wallets every 5 MINUTES (OPTIMIZED)');
         
         const pollingStats = this.webhookManager.getPollingStats();
-        this.logger.info(`🎯 Monitoring ${pollingStats.monitoredWallets} Smart Money wallets via polling`);
+        this.logger.info(`🎯 Monitoring ${pollingStats.monitoredWallets}/20 TOP Smart Money wallets (OPTIMIZED)`);
       } else {
         this.logger.info('🎯 Smart Money DEX monitoring webhook created successfully');
         this.logger.info(`📡 Webhook URL: ${webhookURL}`);
@@ -328,7 +319,7 @@ class SmartMoneyBotRunner {
     } catch (error) {
       this.logger.error('❌ Failed to setup QuickNode webhook:', error);
       
-      this.logger.info('💡 Force starting polling mode as final fallback...');
+      this.logger.info('💡 Force starting OPTIMIZED polling mode as final fallback...');
       this.webhookId = 'polling-mode';
     }
   }
@@ -340,11 +331,11 @@ class SmartMoneyBotRunner {
       const loaderStats = this.smartWalletLoader.getStats();
       
       const monitoringMode = this.webhookId === 'polling-mode' ? 
-        `🔄 <b>Polling Mode</b> (${pollingStats.monitoredWallets} wallets)` : 
+        `🔄 <b>OPTIMIZED Polling Mode</b> (${pollingStats.monitoredWallets}/20 wallets, 5min intervals)` : 
         '📡 <b>Real-time Webhooks</b>';
 
       await this.telegramNotifier.sendCycleLog(
-        `🟢 <b>Advanced Smart Money Bot Online!</b>\n\n` +
+        `🟢 <b>OPTIMIZED Smart Money Bot Online!</b>\n\n` +
         `📊 Monitoring <code>${stats.active}</code> active wallets (<code>${stats.enabled}</code> enabled)\n` +
         `🔫 Snipers: <code>${stats.byCategory.sniper || 0}</code>\n` +
         `💡 Hunters: <code>${stats.byCategory.hunter || 0}</code>\n` +
@@ -355,10 +346,16 @@ class SmartMoneyBotRunner {
         `🟢 Low: <code>${stats.byPriority.low || 0}</code>\n\n` +
         `👥 Family Members: <code>${stats.familyMembers}</code>\n\n` +
         `🎯 Monitoring: ${monitoringMode}\n` +
-        `📈 Flow analysis: <b>Every hour</b>\n` +
-        `🔥 Hot token detection: <b>Every 60min</b>\n` +
-        `🔍 Wallet discovery: <b>Every 2 weeks</b>\n` +
+        `📈 Flow analysis: <b>Every 4 hours (OPTIMIZED)</b>\n` +
+        `🔥 Hot token detection: <b>Every 4 hours</b>\n` +
+        `🔍 Wallet discovery: <b>Every 2 weeks (LIMITED to 20 candidates)</b>\n` +
         `⚠️ Family detection: <b>Disabled</b>\n\n` +
+        `🚀 <b>API OPTIMIZATION ACTIVE:</b>\n` +
+        `• Polling: 5min intervals (-95% requests)\n` +
+        `• Token cache: 24h TTL\n` +
+        `• Price cache: 5min TTL\n` +
+        `• Min trade: $8K+ (strict filters)\n` +
+        `• Max wallets: 20 (top performance only)\n\n` +
         `📝 Config updated: <code>${loaderStats?.lastUpdated}</code>`
       );
     } catch (error) {
@@ -366,12 +363,13 @@ class SmartMoneyBotRunner {
     }
   }
 
-  private startPeriodicAnalysis(): void {
+  // 🔥 ОПТИМИЗИРОВАННЫЙ PERIODIC ANALYSIS: 1 час → 4 ЧАСА!
+  private startPeriodicAnalysisOptimized(): void {
     const runFlowAnalysis = async () => {
       if (!this.isRunning) return;
       
       try {
-        this.logger.info('🔍 Starting hourly Smart Money flow analysis...');
+        this.logger.info('🔍 Starting 4-hourly OPTIMIZED Smart Money flow analysis...');
         
         const flowResult = await this.flowAnalyzer.analyzeSmartMoneyFlows();
         
@@ -409,32 +407,45 @@ class SmartMoneyBotRunner {
           await this.telegramNotifier.sendHotNewTokensByFDV(flowResult.hotNewTokens);
         }
         
-        this.logger.info('✅ Hourly Smart Money flow analysis completed');
+        this.logger.info('✅ 4-hourly OPTIMIZED Smart Money flow analysis completed');
       } catch (error) {
-        this.logger.error('❌ Error in hourly flow analysis:', error);
+        this.logger.error('❌ Error in 4-hourly flow analysis:', error);
       }
     };
 
+    // Первый запуск
     runFlowAnalysis();
-    const flowInterval = setInterval(runFlowAnalysis, 60 * 60 * 1000);
+    
+    // 🔥 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: 1 час → 4 ЧАСА = -75% API запросов!
+    const flowInterval = setInterval(runFlowAnalysis, 4 * 60 * 60 * 1000); // 4 ЧАСА!
     this.intervalIds.push(flowInterval);
 
-    this.logger.info('🔄 Periodic Smart Money flow analysis started');
+    this.logger.info('🔄 OPTIMIZED Periodic Smart Money flow analysis started (4-hour intervals)');
   }
 
-  private startWalletDiscovery(): void {
+  // 🔥 ОПТИМИЗИРОВАННЫЙ WALLET DISCOVERY: ЛИМИТ 20 КАНДИДАТОВ
+  private startWalletDiscoveryOptimized(): void {
     const runWalletDiscovery = async () => {
       if (!this.isRunning) return;
       
       try {
-        this.logger.info('🔍 Starting wallet discovery process...');
+        this.logger.info('🔍 Starting OPTIMIZED wallet discovery process (LIMITED)...');
         
         const discoveryResults = await this.walletDiscovery.discoverSmartWallets();
         
         let newWallets = 0;
         let updatedWallets = 0;
         
+        // 🔥 ОГРАНИЧИВАЕМ количество новых кошельков: максимум 5 за раз
+        let processedCount = 0;
+        const maxNewWallets = 5;
+        
         for (const result of discoveryResults) {
+          if (processedCount >= maxNewWallets) {
+            this.logger.info(`🚫 Reached limit of ${maxNewWallets} new wallets per discovery cycle`);
+            break;
+          }
+          
           if (result.isSmartMoney && result.category) {
             const existingWallet = await this.smDatabase.getSmartWallet(result.address);
             
@@ -442,7 +453,7 @@ class SmartMoneyBotRunner {
               result.address,
               result.category,
               `Auto ${result.category} ${result.address.slice(0, 8)}`,
-              `Automatically discovered ${result.category} wallet`,
+              `Automatically discovered ${result.category} wallet (OPTIMIZED)`,
               {
                 winRate: result.metrics.winRate,
                 totalPnL: result.metrics.totalPnL,
@@ -457,6 +468,7 @@ class SmartMoneyBotRunner {
             if (success) {
               if (!existingWallet) {
                 newWallets++;
+                processedCount++;
               } else {
                 updatedWallets++;
               }
@@ -464,7 +476,7 @@ class SmartMoneyBotRunner {
           }
         }
         
-        const deactivated = await this.deactivateIneffectiveWallets();
+        const deactivated = await this.deactivateIneffectiveWalletsOptimized();
         
         if (this.webhookId === 'polling-mode') {
           this.webhookManager.setDependencies(this.smDatabase, this.telegramNotifier);
@@ -477,42 +489,48 @@ class SmartMoneyBotRunner {
           deactivated
         });
         
-        this.logger.info(`✅ Wallet discovery completed: ${newWallets} new, ${updatedWallets} updated, ${deactivated} deactivated`);
+        this.logger.info(`✅ OPTIMIZED Wallet discovery completed: ${newWallets} new, ${updatedWallets} updated, ${deactivated} deactivated (LIMITED)`);
       } catch (error) {
-        this.logger.error('❌ Error in wallet discovery:', error);
+        this.logger.error('❌ Error in optimized wallet discovery:', error);
       }
     };
 
+    // Первый запуск через 1 час
     setTimeout(() => {
       runWalletDiscovery();
+      
+      // Повторяем каждые 2 недели (можно оставить как есть, т.к. количество кандидатов ограничено)
       const discoveryInterval = setInterval(runWalletDiscovery, 14 * 24 * 60 * 60 * 1000);
       this.intervalIds.push(discoveryInterval);
     }, 60 * 60 * 1000);
 
-    this.logger.info('🔄 Periodic wallet discovery scheduled');
+    this.logger.info('🔄 OPTIMIZED Periodic wallet discovery scheduled (2 weeks, LIMITED to 5 new wallets)');
   }
 
-  private async deactivateIneffectiveWallets(): Promise<number> {
+  // 🔥 ОПТИМИЗИРОВАННОЕ ДЕАКТИВИРОВАНИЕ
+  private async deactivateIneffectiveWalletsOptimized(): Promise<number> {
     const activeWallets = await this.smDatabase.getAllActiveSmartWallets();
     let deactivatedCount = 0;
     
-    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    // 🔥 СТРОЖЕ: 30 дней вместо 60
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     
     for (const wallet of activeWallets) {
       let shouldDeactivate = false;
       let reason = '';
       
-      if (wallet.winRate < 55) {
+      // 🔥 СТРОЖЕ: win rate < 60% (было 55%)
+      if (wallet.winRate < 60) {
         shouldDeactivate = true;
         reason = `Win rate dropped to ${wallet.winRate.toFixed(1)}%`;
-      } else if (wallet.lastActiveAt < sixtyDaysAgo) {
+      } else if (wallet.lastActiveAt < thirtyDaysAgo) {
         shouldDeactivate = true;
         const daysInactive = Math.floor((Date.now() - wallet.lastActiveAt.getTime()) / (1000 * 60 * 60 * 24));
         reason = `Inactive for ${daysInactive} days`;
-      } else if (wallet.totalPnL < -10000) {
+      } else if (wallet.totalPnL < -5000) { // Строже: -5K вместо -10K
         shouldDeactivate = true;
         reason = `Total PnL became negative: ${wallet.totalPnL.toFixed(0)}`;
-      } else if (wallet.avgTradeSize < 1000) {
+      } else if (wallet.avgTradeSize < 2000) { // Строже: 2K вместо 1K
         shouldDeactivate = true;
         reason = `Average trade size too small: ${wallet.avgTradeSize.toFixed(0)}`;
       }
@@ -540,7 +558,7 @@ class SmartMoneyBotRunner {
   }
 
   private async shutdown(): Promise<void> {
-    this.logger.info('🔴 Shutting down Smart Money Bot...');
+    this.logger.info('🔴 Shutting down OPTIMIZED Smart Money Bot...');
     
     this.isRunning = false;
     
@@ -561,7 +579,7 @@ class SmartMoneyBotRunner {
       }
     } else if (this.webhookId === 'polling-mode') {
       this.webhookManager.stopPollingMode();
-      this.logger.info('✅ Polling mode stopped');
+      this.logger.info('✅ OPTIMIZED Polling mode stopped');
     }
     
     if (this.database) {
@@ -573,12 +591,12 @@ class SmartMoneyBotRunner {
     }
     
     try {
-      await this.telegramNotifier.sendCycleLog('🔴 <b>Smart Money Bot stopped</b>');
+      await this.telegramNotifier.sendCycleLog('🔴 <b>OPTIMIZED Smart Money Bot stopped</b>');
     } catch (error) {
       this.logger.error('Failed to send shutdown notification:', error);
     }
     
-    this.logger.info('✅ Smart Money Bot shutdown completed');
+    this.logger.info('✅ OPTIMIZED Smart Money Bot shutdown completed');
     process.exit(0);
   }
 }
@@ -588,7 +606,7 @@ const main = async () => {
     const bot = new SmartMoneyBotRunner();
     await bot.start();
   } catch (error) {
-    console.error('💥 Fatal error starting Smart Money Bot:', error);
+    console.error('💥 Fatal error starting OPTIMIZED Smart Money Bot:', error);
     process.exit(1);
   }
 };
