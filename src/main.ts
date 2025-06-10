@@ -426,7 +426,10 @@ class SmartMoneyBotRunner {
   // 🔥 ОПТИМИЗИРОВАННЫЙ WALLET DISCOVERY: ЛИМИТ 20 КАНДИДАТОВ
   private startWalletDiscoveryOptimized(): void {
     const runWalletDiscovery = async () => {
-      if (!this.isRunning) return;
+      if (!this.isRunning) {
+        this.logger.warn('⚠️ Bot not running, skipping wallet discovery');
+        return;
+      }
       
       try {
         this.logger.info('🔍 Starting OPTIMIZED wallet discovery process (LIMITED)...');
@@ -490,19 +493,30 @@ class SmartMoneyBotRunner {
         });
         
         this.logger.info(`✅ OPTIMIZED Wallet discovery completed: ${newWallets} new, ${updatedWallets} updated, ${deactivated} deactivated (LIMITED)`);
+        
       } catch (error) {
         this.logger.error('❌ Error in optimized wallet discovery:', error);
       }
     };
 
-    // Первый запуск через 1 час
-    setTimeout(() => {
-      runWalletDiscovery();
+    // 🔥 ИСПРАВЛЕННЫЙ КОД: запуск через 1 час
+    this.logger.info('⏰ Wallet discovery will start in 1 hour...');
+    
+    const discoveryTimeout = setTimeout(async () => {
+      this.logger.info('⏰ 1 hour passed, starting wallet discovery...');
+      await runWalletDiscovery();
       
-      // Повторяем каждые 2 недели (можно оставить как есть, т.к. количество кандидатов ограничено)
-      const discoveryInterval = setInterval(runWalletDiscovery, 14 * 24 * 60 * 60 * 1000);
+      // Повторяем каждые 2 недели
+      const discoveryInterval = setInterval(async () => {
+        this.logger.info('⏰ 2 weeks passed, running periodic wallet discovery...');
+        await runWalletDiscovery();
+      }, 14 * 24 * 60 * 60 * 1000);
+      
       this.intervalIds.push(discoveryInterval);
-    }, 60 * 60 * 1000);
+    }, 60 * 60 * 1000); // 1 час
+    
+    // 🔥 ДОБАВЛЯЕМ TIMEOUT В СПИСОК ДЛЯ ОЧИСТКИ
+    this.intervalIds.push(discoveryTimeout as any);
 
     this.logger.info('🔄 OPTIMIZED Periodic wallet discovery scheduled (2 weeks, LIMITED to 5 new wallets)');
   }
