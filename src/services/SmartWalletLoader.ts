@@ -1,4 +1,4 @@
-// src/services/SmartWalletLoader.ts - исправлен addedAt на DATETIME
+// src/services/SmartWalletLoader.ts - БЕЗ Family Detection
 import fs from 'fs';
 import path from 'path';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
@@ -12,16 +12,14 @@ interface WalletConfig {
   nickname: string;
   description: string;
   addedBy: 'manual' | 'discovery' | 'placeholder';
-  addedAt: string; // ISO datetime string
+  addedAt: string;
   verified: boolean;
-  // metrics разложены
   winRate: number;
   totalPnL: number;
   totalTrades: number;
   avgTradeSize: number;
   maxTradeSize: number;
   performanceScore: number;
-  // settings разложены
   minTradeAlert: number;
   priority: 'high' | 'medium' | 'low';
   enabled: boolean;
@@ -102,16 +100,17 @@ export class SmartWalletLoader {
           avgTradeSize: walletConfig.avgTradeSize,
           maxTradeSize: walletConfig.maxTradeSize,
           minTradeSize: Math.min(walletConfig.avgTradeSize * 0.3, 1000),
-          lastActiveAt: this.parseDate(walletConfig.addedAt) || new Date(Date.now() - 24 * 60 * 60 * 1000),
+          lastActiveAt: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000),
           performanceScore: walletConfig.performanceScore,
           isActive: true,
           sharpeRatio: 2.1,
           maxDrawdown: 15.0,
           volumeScore: 80,
+          // БЕЗ Family Detection - всегда false/undefined/null
           isFamilyMember: false,
-          familyAddresses: [],
-          coordinationScore: 0,
-          stealthLevel: 60,
+          familyAddresses: undefined,
+          coordinationScore: null,
+          stealthLevel: null,
           earlyEntryRate: walletConfig.category === 'sniper' ? 45 : 25,
           avgHoldTime: walletConfig.category === 'trader' ? 72 : walletConfig.category === 'hunter' ? 12 : 4
         };
@@ -158,7 +157,7 @@ export class SmartWalletLoader {
     nickname: string,
     description: string,
     metrics: any,
-    addedBy: 'manual' | 'discovery' = 'manual'
+    addedBy: 'manual' | 'discovery' | 'placeholder' = 'manual'
   ): Promise<boolean> {
     try {
       if (!this.config) {
@@ -173,7 +172,7 @@ export class SmartWalletLoader {
         nickname,
         description,
         addedBy,
-        addedAt: new Date().toISOString(), // DATETIME format
+        addedAt: new Date().toISOString(),
         verified: addedBy === 'manual',
         winRate: metrics.winRate || 70,
         totalPnL: metrics.totalPnL || 50000,
@@ -208,16 +207,17 @@ export class SmartWalletLoader {
         avgTradeSize: newWallet.avgTradeSize,
         maxTradeSize: newWallet.maxTradeSize,
         minTradeSize: Math.min(newWallet.avgTradeSize * 0.3, 1000),
-        lastActiveAt: new Date(),
+        lastActiveAt: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000),
         performanceScore: newWallet.performanceScore,
         isActive: true,
         sharpeRatio: 2.1,
         maxDrawdown: 15.0,
         volumeScore: 80,
+        // БЕЗ Family Detection - всегда false/undefined/null
         isFamilyMember: false,
-        familyAddresses: [],
-        coordinationScore: 0,
-        stealthLevel: 60,
+        familyAddresses: undefined,
+        coordinationScore: null,
+        stealthLevel: null,
         earlyEntryRate: category === 'sniper' ? 45 : 25,
         avgHoldTime: category === 'trader' ? 72 : category === 'hunter' ? 12 : 4
       };
@@ -227,7 +227,7 @@ export class SmartWalletLoader {
         description: newWallet.description,
         minTradeAlert: newWallet.minTradeAlert,
         priority: newWallet.priority,
-        addedBy: newWallet.addedBy,
+        addedBy: newWallet.addedBy === 'placeholder' ? 'discovery' as const : newWallet.addedBy,
         verified: newWallet.verified
       };
 
@@ -237,47 +237,6 @@ export class SmartWalletLoader {
 
     } catch (error) {
       this.logger.error('❌ Error adding wallet to config:', error);
-      return false;
-    }
-  }
-
-  async updateWalletSettings(
-    address: string, 
-    settings: {
-      enabled?: boolean;
-      priority?: 'high' | 'medium' | 'low';
-      minTradeAlert?: number;
-    }
-  ): Promise<boolean> {
-    try {
-      if (!this.config) {
-        this.config = this.loadConfig();
-      }
-
-      const walletIndex = this.config!.wallets.findIndex(w => w.address === address);
-      if (walletIndex >= 0) {
-        const wallet = this.config!.wallets[walletIndex];
-        
-        if (settings.enabled !== undefined) {
-          wallet.enabled = settings.enabled;
-        }
-        if (settings.priority !== undefined) {
-          wallet.priority = settings.priority;
-        }
-        if (settings.minTradeAlert !== undefined) {
-          wallet.minTradeAlert = settings.minTradeAlert;
-        }
-
-        await this.saveConfig();
-      }
-
-      await this.smDatabase.updateWalletSettings(address, settings);
-
-      this.logger.info(`⚙️ Updated settings for wallet: ${address}`);
-      return true;
-
-    } catch (error) {
-      this.logger.error('❌ Error updating wallet settings:', error);
       return false;
     }
   }
@@ -303,20 +262,20 @@ export class SmartWalletLoader {
       for (const walletConfig of this.config!.wallets) {
         if (!dbAddresses.has(walletConfig.address) && walletConfig.enabled) {
           const success = await this.addWalletToConfig(
-  walletConfig.address,
-  walletConfig.category,
-  walletConfig.nickname,
-  walletConfig.description,
-  {
-    winRate: walletConfig.winRate,
-    totalPnL: walletConfig.totalPnL,
-    totalTrades: walletConfig.totalTrades,
-    avgTradeSize: walletConfig.avgTradeSize,
-    maxTradeSize: walletConfig.maxTradeSize,
-    performanceScore: walletConfig.performanceScore
-  },
-  walletConfig.addedBy === 'placeholder' ? 'discovery' : walletConfig.addedBy  // <- ИСПРАВЛЕНИЕ
-);
+            walletConfig.address,
+            walletConfig.category,
+            walletConfig.nickname,
+            walletConfig.description,
+            {
+              winRate: walletConfig.winRate,
+              totalPnL: walletConfig.totalPnL,
+              totalTrades: walletConfig.totalTrades,
+              avgTradeSize: walletConfig.avgTradeSize,
+              maxTradeSize: walletConfig.maxTradeSize,
+              performanceScore: walletConfig.performanceScore
+            },
+            walletConfig.addedBy
+          );
           if (success) added++;
         } else if (dbAddresses.has(walletConfig.address)) {
           await this.smDatabase.updateWalletSettings(walletConfig.address, {
@@ -362,7 +321,7 @@ export class SmartWalletLoader {
             nickname: settings.nickname || `${wallet.category} ${wallet.address.slice(0, 8)}`,
             description: settings.description || `Auto-exported ${wallet.category} wallet`,
             addedBy: 'discovery',
-            addedAt: new Date().toISOString(), // DATETIME format
+            addedAt: new Date().toISOString(),
             verified: true,
             winRate: wallet.winRate,
             totalPnL: wallet.totalPnL,
@@ -411,6 +370,47 @@ export class SmartWalletLoader {
 
     } catch (error) {
       this.logger.error('❌ Error exporting config from database:', error);
+    }
+  }
+
+  async updateWalletSettings(
+    address: string, 
+    settings: {
+      enabled?: boolean;
+      priority?: 'high' | 'medium' | 'low';
+      minTradeAlert?: number;
+    }
+  ): Promise<boolean> {
+    try {
+      if (!this.config) {
+        this.config = this.loadConfig();
+      }
+
+      const walletIndex = this.config!.wallets.findIndex(w => w.address === address);
+      if (walletIndex >= 0) {
+        const wallet = this.config!.wallets[walletIndex];
+        
+        if (settings.enabled !== undefined) {
+          wallet.enabled = settings.enabled;
+        }
+        if (settings.priority !== undefined) {
+          wallet.priority = settings.priority;
+        }
+        if (settings.minTradeAlert !== undefined) {
+          wallet.minTradeAlert = settings.minTradeAlert;
+        }
+
+        await this.saveConfig();
+      }
+
+      await this.smDatabase.updateWalletSettings(address, settings);
+
+      this.logger.info(`⚙️ Updated settings for wallet: ${address}`);
+      return true;
+
+    } catch (error) {
+      this.logger.error('❌ Error updating wallet settings:', error);
+      return false;
     }
   }
 
@@ -503,15 +503,15 @@ export class SmartWalletLoader {
     try {
       const totalEnabled = this.config?.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder').length || 0;
       const byCategory = {
-        sniper: this.config?.wallets.filter(w => w.enabled && w.category === 'sniper').length || 0,
-        hunter: this.config?.wallets.filter(w => w.enabled && w.category === 'hunter').length || 0,
-        trader: this.config?.wallets.filter(w => w.enabled && w.category === 'trader').length || 0
+        sniper: this.config?.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder' && w.category === 'sniper').length || 0,
+        hunter: this.config?.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder' && w.category === 'hunter').length || 0,
+        trader: this.config?.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder' && w.category === 'trader').length || 0
       };
 
       const byPriority = {
-        high: this.config?.wallets.filter(w => w.enabled && w.priority === 'high').length || 0,
-        medium: this.config?.wallets.filter(w => w.enabled && w.priority === 'medium').length || 0,
-        low: this.config?.wallets.filter(w => w.enabled && w.priority === 'low').length || 0
+        high: this.config?.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder' && w.priority === 'high').length || 0,
+        medium: this.config?.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder' && w.priority === 'medium').length || 0,
+        low: this.config?.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder' && w.priority === 'low').length || 0
       };
 
       await this.telegramNotifier.sendCycleLog(
@@ -538,7 +538,7 @@ export class SmartWalletLoader {
   getStats() {
     if (!this.config) return null;
 
-    const enabled = this.config.wallets.filter(w => w.enabled);
+    const enabled = this.config.wallets.filter(w => w.enabled && w.addedBy !== 'placeholder');
     const byCategory = {
       sniper: enabled.filter(w => w.category === 'sniper').length,
       hunter: enabled.filter(w => w.category === 'hunter').length,

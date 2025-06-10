@@ -6,7 +6,6 @@ import { Database } from './services/Database';
 import { SmartMoneyDatabase } from './services/SmartMoneyDatabase';
 import { SmartMoneyFlowAnalyzer } from './services/SmartMoneyFlowAnalyzer';
 import { SmartWalletDiscovery } from './services/SmartWalletDiscovery';
-// import { FamilyWalletDetector } from './services/FamilyWalletDetector'; // ОТКЛЮЧЕН
 import { WebhookServer } from './services/WebhookServer';
 import { QuickNodeWebhookManager } from './services/QuickNodeWebhookManager';
 import { Logger } from './utils/Logger';
@@ -21,7 +20,6 @@ class SmartMoneyBotRunner {
   private telegramNotifier: TelegramNotifier;
   private flowAnalyzer: SmartMoneyFlowAnalyzer;
   private walletDiscovery: SmartWalletDiscovery;
-  // private familyDetector: FamilyWalletDetector; // ОТКЛЮЧЕН
   private webhookServer: WebhookServer;
   private webhookManager: QuickNodeWebhookManager; 
   private logger: Logger;
@@ -47,9 +45,11 @@ class SmartMoneyBotRunner {
     this.smartWalletLoader = new SmartWalletLoader(this.smDatabase, this.telegramNotifier);
 
     this.solanaMonitor = new SolanaMonitor(this.database, this.telegramNotifier);
-    this.flowAnalyzer = new SmartMoneyFlowAnalyzer(this.smDatabase, this.telegramNotifier);
+    
+    // ИСПРАВЛЕНО: добавлен параметр database в конструктор
+    this.flowAnalyzer = new SmartMoneyFlowAnalyzer(this.smDatabase, this.telegramNotifier, this.database);
+    
     this.walletDiscovery = new SmartWalletDiscovery(this.smDatabase, this.database);
-    // this.familyDetector = new FamilyWalletDetector(this.smDatabase, this.database); // ОТКЛЮЧЕН
     
     this.webhookServer = new WebhookServer(
       this.database, 

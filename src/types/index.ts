@@ -1,4 +1,4 @@
-// src/types/index.ts - ИСПРАВЛЕНО со всеми типами
+// src/types/index.ts - БЕЗ Family Detection
 export interface TokenSwap {
   transactionId: string;
   walletAddress: string;
@@ -112,7 +112,7 @@ export interface HeliusTransaction {
   transactionError?: any;
 }
 
-// ДОБАВЛЯЕМ Smart Money типы прямо сюда
+// Smart Money типы - БЕЗ Family Detection
 export interface SmartMoneyWallet {
   address: string;
   category: 'sniper' | 'hunter' | 'trader';
@@ -129,10 +129,10 @@ export interface SmartMoneyWallet {
   volumeScore?: number;
   isActive: boolean;
   
-  // Семейные связи
-  isFamilyMember?: boolean;
-  familyAddresses?: string[];
-  coordinationScore?: number;
+  // Family поля ОТКЛЮЧЕНЫ - всегда false/undefined
+  isFamilyMember?: false; // всегда false
+  familyAddresses?: undefined; // всегда undefined
+  coordinationScore?: 0; // всегда 0
   stealthLevel?: number;
   
   // Категория-специфичные метрики
@@ -196,24 +196,14 @@ export interface SmartMoneySwap {
   pnl: number;
   totalTrades: number;
   
-  // Семейная информация
-  isFamilyMember: boolean;
-  familySize?: number;
-  familyId?: string;
+  // Family поля ОТКЛЮЧЕНЫ - всегда false/0/undefined
+  isFamilyMember: false; // всегда false
+  familySize?: 0; // всегда 0
+  familyId?: undefined; // всегда undefined
 }
 
-export interface FamilyWalletCluster {
-  id: string;
-  wallets: string[];
-  suspicionScore: number;
-  coordinationScore: number;
-  detectionMethods: string[];
-  totalPnL: number;
-  combinedVolume: number;
-  avgTimingDiff: number;
-  commonTokens: string[];
-  createdAt: Date;
-}
+// Family типы УДАЛЕНЫ - больше не используются
+// export interface FamilyWalletCluster - УДАЛЕН
 
 export interface WalletPerformanceMetrics {
   totalPnL: number;
@@ -235,6 +225,6 @@ export interface WalletAnalysisResult {
   isSmartMoney: boolean;
   category?: 'sniper' | 'hunter' | 'trader';
   metrics: WalletPerformanceMetrics;
-  familyConnections: string[];
+  familyConnections: []; // всегда пустой массив
   disqualificationReasons: string[];
 }

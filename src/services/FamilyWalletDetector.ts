@@ -1,5 +1,5 @@
 // src/services/FamilyWalletDetector.ts
-import { SmartMoneyDatabase } from './SmartMoneyDatabase';
+/*import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { Database } from './Database';
 import { Logger } from '../utils/Logger';
 import { FamilyWalletCluster, SmartMoneyWallet, WalletPerformanceMetrics } from '../types';
@@ -589,4 +589,4 @@ export class FamilyWalletDetector {
   private generateClusterId(): string {
     return `family_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
-}
+} */

@@ -1,4 +1,4 @@
-// src/services/WebhookServer.ts - ИСПРАВЛЕНО для Background Worker
+// src/services/WebhookServer.ts - БЕЗ Family Detection
 import express from 'express';
 import { Database } from './Database';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
@@ -328,9 +328,10 @@ export class WebhookServer {
         winRate: smartWallet.winRate,
         pnl: smartWallet.totalPnL,
         totalTrades: smartWallet.totalTrades,
-        isFamilyMember: smartWallet.isFamilyMember || false,
-        familySize: smartWallet.familyAddresses?.length || 0,
-        familyId: smartWallet.familyAddresses?.[0] || undefined
+        // FAMILY ПОЛЯ ОТКЛЮЧЕНЫ
+        isFamilyMember: false, // всегда false
+        familySize: 0, // всегда 0
+        familyId: undefined // всегда undefined
       };
     } catch (error) {
       this.logger.error('Error extracting swap info:', error as Error);
@@ -392,8 +393,8 @@ export class WebhookServer {
         swapInfo.timestamp.toISOString(),
         'Unknown', // DEX будет определяться отдельно
         swapInfo.category,
-        swapInfo.isFamilyMember ? 1 : 0,
-        swapInfo.familyId || null,
+        0, // is_family_member всегда 0
+        null, // family_id всегда null
         swapInfo.pnl,
         swapInfo.winRate,
         swapInfo.totalTrades

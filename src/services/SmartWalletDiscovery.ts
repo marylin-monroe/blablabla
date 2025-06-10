@@ -1,4 +1,4 @@
-// src/services/SmartWalletDiscovery.ts - ПОЛНАЯ РЕАЛИЗАЦИЯ
+// src/services/SmartWalletDiscovery.ts - БЕЗ Family Detection
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { Database } from './Database';
 import { Logger } from '../utils/Logger';
@@ -128,7 +128,7 @@ export class SmartWalletDiscovery {
           address: walletAddress,
           isSmartMoney: false,
           metrics: this.getDefaultMetrics(),
-          familyConnections: [],
+          familyConnections: [], // Всегда пустой массив
           disqualificationReasons: ['Insufficient transaction history']
         };
       }
@@ -139,9 +139,6 @@ export class SmartWalletDiscovery {
       // Определяем категорию
       const category = this.determineCategory(transactions, metrics);
       
-      // Ищем семейные связи
-      const familyConnections = await this.findFamilyConnections(walletAddress, transactions);
-      
       // Проверяем критерии Smart Money
       const { isSmartMoney, disqualificationReasons } = this.evaluateSmartMoneyCriteria(metrics);
 
@@ -150,7 +147,7 @@ export class SmartWalletDiscovery {
         isSmartMoney,
         category,
         metrics,
-        familyConnections,
+        familyConnections: [], // Всегда пустой массив
         disqualificationReasons
       };
 
@@ -308,11 +305,7 @@ export class SmartWalletDiscovery {
     return undefined;
   }
 
-  private async findFamilyConnections(walletAddress: string, transactions: any[]): Promise<string[]> {
-    // Простая логика поиска связанных кошельков
-    // В реальности здесь была бы более сложная логика анализа паттернов
-    return [];
-  }
+  // ПОЛНОСТЬЮ УБРАЛИ findFamilyConnections - метод удален
 
   private evaluateSmartMoneyCriteria(metrics: WalletPerformanceMetrics): {
     isSmartMoney: boolean;

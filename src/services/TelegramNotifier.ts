@@ -1,4 +1,4 @@
-// src/services/TelegramNotifier.ts - ИСПРАВЛЕНО все ошибки
+// src/services/TelegramNotifier.ts - БЕЗ Family Detection
 import TelegramBot from 'node-telegram-bot-api';
 import { TokenSwap, WalletInfo, SmartMoneyReport, InsiderAlert, SmartMoneyFlow, HotNewToken, SmartMoneySwap } from '../types';
 import { Logger } from '../utils/Logger';
@@ -56,14 +56,14 @@ export class TelegramNotifier {
     }
   }
 
-  // Улучшенный метод для отправки Smart Money свапов
+  // Улучшенный метод для отправки Smart Money свапов - БЕЗ FAMILY ИНФОРМАЦИИ
   async sendSmartMoneySwap(swap: SmartMoneySwap): Promise<void> {
     try {
       const categoryEmoji = this.getCategoryEmoji(swap.category);
-      const familyText = swap.isFamilyMember ? ` <b>Family:</b> <code>${swap.familySize}</code>` : '';
+      // УБРАЛИ family информацию
       const walletShort = this.truncateAddress(swap.walletAddress);
 
-      const message = `${categoryEmoji}💚 <b>$${this.formatNumber(swap.amountUSD)}</b> 💚 <code>${this.formatTokenAmount(swap.tokenAmount)} #${swap.tokenSymbol}</code> <code>($${(swap.amountUSD / swap.tokenAmount).toFixed(6)})</code> <code>#${walletShort}</code> <b>WR:</b> <code>${swap.winRate.toFixed(2)}%</code> <b>PNL:</b> <code>$${this.formatNumber(swap.pnl)}</code> <b>TT:</b> <code>${swap.totalTrades}</code>${familyText} <a href="https://solscan.io/token/${swap.tokenAddress}">SolS</a> <a href="https://dexscreener.com/solana/${swap.tokenAddress}">DS</a>
+      const message = `${categoryEmoji}💚 <b>$${this.formatNumber(swap.amountUSD)}</b> 💚 <code>${this.formatTokenAmount(swap.tokenAmount)} #${swap.tokenSymbol}</code> <code>($${(swap.amountUSD / swap.tokenAmount).toFixed(6)})</code> <code>#${walletShort}</code> <b>WR:</b> <code>${swap.winRate.toFixed(2)}%</code> <b>PNL:</b> <code>$${this.formatNumber(swap.pnl)}</code> <b>TT:</b> <code>${swap.totalTrades}</code> <a href="https://solscan.io/token/${swap.tokenAddress}">SolS</a> <a href="https://dexscreener.com/solana/${swap.tokenAddress}">DS</a>
 
 <a href="https://solscan.io/account/${swap.walletAddress}">Wallet</a> <a href="https://solscan.io/tx/${swap.transactionId}">TXN</a> <code>#SmartSwapSol</code>
 
@@ -219,47 +219,14 @@ export class TelegramNotifier {
     }
   }
 
-  // Метод для отправки уведомлений о семейных кошельках
-  async sendFamilyWalletAlert(familyData: {
-    id: string;
-    wallets: string[];
-    suspicionScore: number;
-    detectionMethod: string;
-    totalPnL: number;
-    coordinationScore: number;
-  }): Promise<void> {
-    try {
-      const message = `🔗👥 <b>Family Wallet Detected</b> <code>#FamilyWallet</code>
+  // УДАЛЕН: sendFamilyWalletAlert - больше не используется
 
-<b>Cluster ID:</b> <code>${familyData.id}</code>
-<b>Wallets:</b> <code>${familyData.wallets.length}</code>
-<b>Suspicion Score:</b> <code>${familyData.suspicionScore}/100</code>
-<b>Detection Method:</b> <code>${familyData.detectionMethod}</code>
-<b>Combined PnL:</b> <code>$${this.formatNumber(familyData.totalPnL)}</code>
-<b>Coordination:</b> <code>${familyData.coordinationScore.toFixed(1)}%</code>
-
-<b>Wallets:</b>
-${familyData.wallets.slice(0, 5).map(wallet => 
-  `<code>${this.truncateAddress(wallet)}</code>`
-).join('\n')}`;
-
-      await this.bot.sendMessage(this.userId, message, {
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-      });
-
-      this.logger.info(`Family Wallet Alert sent: ${familyData.wallets.length} wallets`);
-    } catch (error) {
-      this.logger.error('Error sending family wallet alert:', error);
-    }
-  }
-
-  // Метод для отправки статистики базы Smart Money кошельков
+  // Метод для отправки статистики базы Smart Money кошельков - БЕЗ FAMILY INFO
   async sendWalletDatabaseStats(stats: {
     total: number;
     active: number;
     byCategory: Record<string, number>;
-    familyMembers: number;
+    familyMembers: number; // игнорируется, всегда 0
     newlyAdded: number;
     deactivated: number;
   }): Promise<void> {
@@ -273,7 +240,6 @@ ${familyData.wallets.slice(0, 5).map(wallet =>
 💡 <b>Hunters:</b> <code>${stats.byCategory.hunter || 0}</code>
 🐳 <b>Traders:</b> <code>${stats.byCategory.trader || 0}</code>
 
-👥 <b>Family Members:</b> <code>${stats.familyMembers}</code>
 ✅ <b>Newly Added:</b> <code>${stats.newlyAdded}</code>
 ❌ <b>Deactivated:</b> <code>${stats.deactivated}</code>
 

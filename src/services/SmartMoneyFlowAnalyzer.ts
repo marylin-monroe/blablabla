@@ -1,5 +1,6 @@
-// src/services/SmartMoneyFlowAnalyzer.ts - ИСПРАВЛЕНО все ошибки
+// src/services/SmartMoneyFlowAnalyzer.ts - ИСПРАВЛЕНО getWalletTransactionsAfter
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
+import { Database } from './Database'; // ДОБАВЛЕНО
 import { TelegramNotifier } from './TelegramNotifier';
 import { Logger } from '../utils/Logger';
 import {
@@ -18,12 +19,18 @@ export interface FlowAnalysisResult {
 
 export class SmartMoneyFlowAnalyzer {
   private smDatabase: SmartMoneyDatabase;
+  private database: Database; // ДОБАВЛЕНО
   private telegramNotifier: TelegramNotifier;
   private logger: Logger;
   private heliusApiKey: string;
 
-  constructor(smDatabase: SmartMoneyDatabase, telegramNotifier: TelegramNotifier) {
+  constructor(
+    smDatabase: SmartMoneyDatabase, 
+    telegramNotifier: TelegramNotifier,
+    database: Database // ДОБАВЛЕНО
+  ) {
     this.smDatabase = smDatabase;
+    this.database = database; // ДОБАВЛЕНО
     this.telegramNotifier = telegramNotifier;
     this.logger = Logger.getInstance();
     this.heliusApiKey = process.env.HELIUS_API_KEY!;
@@ -274,12 +281,26 @@ export class SmartMoneyFlowAnalyzer {
     }
   }
 
-  // Вспомогательные методы
+  // ИСПРАВЛЕНО: Реальное получение транзакций
   private async getWalletTransactionsAfter(walletAddress: string, afterDate: Date): Promise<TokenSwap[]> {
     try {
-      // Временно используем основную базу данных, пока метод не добавлен в SmartMoneyDatabase
-      // В будущем: const transactions = await this.smDatabase.getSmartWalletTransactions(walletAddress, afterDate);
-      return [];
+      // Сначала пробуем получить из Smart Money базы данных
+      const smTransactions = await this.smDatabase.getSmartWalletTransactions(walletAddress, afterDate);
+      
+      if (smTransactions.length > 0) {
+        this.logger.debug(`Found ${smTransactions.length} SM transactions for ${walletAddress}`);
+        return smTransactions;
+      }
+
+      // Если в SM базе нет, ищем в основной базе
+      const allTransactions = await this.database.getWalletTransactionsAfter(walletAddress, afterDate);
+      
+      // Фильтруем только транзакции этого кошелька (если он есть в SM списке)
+      const walletTransactions = allTransactions.filter(tx => tx.walletAddress === walletAddress);
+      
+      this.logger.debug(`Found ${walletTransactions.length} general transactions for SM wallet ${walletAddress}`);
+      return walletTransactions;
+
     } catch (error) {
       this.logger.error(`Error getting transactions for wallet ${walletAddress}:`, error);
       return [];

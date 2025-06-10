@@ -1,4 +1,4 @@
-// src/services/QuickNodeWebhookManager.ts - ИСПРАВЛЕНО с интегрированным Polling
+// src/services/QuickNodeWebhookManager.ts - БЕЗ Family Detection
 import { Logger } from '../utils/Logger';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { TelegramNotifier } from './TelegramNotifier';
@@ -379,9 +379,10 @@ export class QuickNodeWebhookManager {
             winRate: wallet.winRate,
             pnl: wallet.totalPnL,
             totalTrades: wallet.totalTrades,
-            isFamilyMember: wallet.isFamilyMember || false,
-            familySize: wallet.familyAddresses?.length || 0,
-            familyId: wallet.familyAddresses?.[0]
+            // FAMILY ПОЛЯ ОТКЛЮЧЕНЫ
+            isFamilyMember: false, // всегда false
+            familySize: 0, // всегда 0
+            familyId: undefined // всегда undefined
           };
 
           swaps.push(swap);
@@ -443,8 +444,8 @@ export class QuickNodeWebhookManager {
         swap.timestamp.toISOString(),
         'Polling',
         swap.category,
-        swap.isFamilyMember ? 1 : 0,
-        swap.familyId || null,
+        0, // is_family_member всегда 0
+        null, // family_id всегда null
         swap.pnl,
         swap.winRate,
         swap.totalTrades

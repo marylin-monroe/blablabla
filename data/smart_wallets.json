@@ -1,9 +1,8 @@
 {
   "version": "2.0",
-  "lastUpdated": "2025-01-15",
+  "lastUpdated": "2025-06-10",
   "description": "Smart Money кошельки для мониторинга (нормализованная схема)",
   "totalWallets": 3,
-  
   "wallets": [
     {
       "address": "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
@@ -11,7 +10,7 @@
       "nickname": "SOL Sniper Pro",
       "description": "Известный снайпер новых токенов на Solana",
       "addedBy": "manual",
-      "addedAt": "2025-01-15T10:30:00.000Z",
+      "addedAt": "2025-06-10T07:56:21.902Z",
       "verified": true,
       "winRate": 78.5,
       "totalPnL": 185000,
@@ -19,18 +18,17 @@
       "avgTradeSize": 8500,
       "maxTradeSize": 35000,
       "performanceScore": 85,
-      "minTradeAlert": 5000,
-      "priority": "high",
+      "minTradeAlert": 3000,
+      "priority": "medium",
       "enabled": true
     },
-    
     {
-      "address": "GrAkKfEpTKQuVHG2Y97Y2FF4i7y7Q5AHLK94JBy7Y5yv", 
+      "address": "GrAkKfEpTKQuVHG2Y97Y2FF4i7y7Q5AHLK94JBy7Y5yv",
       "category": "hunter",
       "nickname": "Altcoin Hunter",
       "description": "Быстрый охотник за альткоинами",
       "addedBy": "manual",
-      "addedAt": "2025-01-15T10:45:00.000Z", 
+      "addedAt": "2025-06-10T07:56:21.905Z",
       "verified": true,
       "winRate": 72.3,
       "totalPnL": 120000,
@@ -38,18 +36,17 @@
       "avgTradeSize": 6500,
       "maxTradeSize": 25000,
       "performanceScore": 78,
-      "minTradeAlert": 4000,
+      "minTradeAlert": 5000,
       "priority": "medium",
       "enabled": true
     },
-
     {
       "address": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
-      "category": "trader", 
+      "category": "trader",
       "nickname": "Whale Trader",
       "description": "Крупный долгосрочный трейдер",
       "addedBy": "manual",
-      "addedAt": "2025-01-15T11:00:00.000Z",
+      "addedAt": "2025-06-10T07:56:21.919Z",
       "verified": true,
       "winRate": 68.9,
       "totalPnL": 520000,
@@ -58,11 +55,10 @@
       "maxTradeSize": 150000,
       "performanceScore": 82,
       "minTradeAlert": 15000,
-      "priority": "high",
+      "priority": "medium",
       "enabled": true
     }
   ],
-
   "discovery": {
     "autoDiscoveryEnabled": true,
     "maxWallets": 150,
@@ -70,7 +66,6 @@
     "discoveryInterval": "14d",
     "lastDiscovery": null
   },
-
   "filters": {
     "minWinRate": 65,
     "minTotalPnL": 50000,
