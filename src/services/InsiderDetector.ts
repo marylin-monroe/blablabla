@@ -318,23 +318,26 @@ export class InsiderDetector {
       this.logger.error('Error calculating insider metrics:', error);
       return { insiderScore: 0, earlyEntryRate: 0, avgHoldTime: 0, totalProfit: 0 };
     }
+    const avgEntryAge = candidate.successfulMoonshots.reduce((sum, ms) => sum + ms.ageAtEntry, 0) / candidate.successfulMoonshots.length;
+    const avgMultiplier = candidate.successfulMoonshots.reduce((sum, ms) => sum + ms.multiplier, 0) / candidate.successfulMoonshots.length;
   }
 
   // 💰 Получение текущей цены токена
   private async getCurrentTokenPrice(tokenAddress: string): Promise<number> {
-    try {
-      const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-      if (response.ok) {
-        const data = await response.json() as any;
-        if (data.pairs && data.pairs.length > 0) {
-          return parseFloat(data.pairs[0].priceUsd || '0');
-        }
+  try {
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    if (response.ok) {
+      const data = await response.json() as any;
+      if (data.pairs && data.pairs.length > 0) {
+        const price = parseFloat(data.pairs[0].priceUsd || '0');
+        return Math.max(price, 0.000001); // ✅ Минимальная цена для избежания деления на 0
       }
-      return 0;
-    } catch (error) {
-      return 0;
     }
+    return 0.000001; // ✅ Минимальная цена по умолчанию
+  } catch (error) {
+    return 0.000001;
   }
+}
 
   // 📈 Получение рыночной капитализации
   private async getTokenMarketCap(tokenAddress: string, price: number): Promise<number> {

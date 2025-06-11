@@ -1,4 +1,4 @@
-// src/services/QuickNodeWebhookManager.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ
+// src/services/QuickNodeWebhookManager.ts - ПОЛНАЯ ВЕРСИЯ с ALCHEMY + ВСЕ ИСПРАВЛЕНИЯ
 import { Logger } from '../utils/Logger';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { TelegramNotifier } from './TelegramNotifier';
@@ -22,7 +22,7 @@ interface QuickNodeStreamResponse {
   filters: any;
 }
 
-// 🚀 API RATE LIMITING STRUCTURE
+// 🚀 УЛУЧШЕННАЯ СТРУКТУРА API ЛИМИТОВ С ЗАЩИТОЙ ОТ RACE CONDITIONS
 interface ApiLimits {
   requestsPerMinute: number;
   requestsPerDay: number;
@@ -30,12 +30,28 @@ interface ApiLimits {
   currentDayRequests: number;
   minuteReset: number;
   dayReset: number;
+  lastRequestTime: number; // Для дополнительной защиты
+}
+
+// 🆕 СТРУКТУРА ДЛЯ ПРОВАЙДЕРОВ
+interface RpcProvider {
+  name: string;
+  url: string;
+  key?: string;
+  isHealthy: boolean;
+  requestCount: number;
+  errorCount: number;
+  lastError?: string;
+  lastErrorTime?: number;
 }
 
 export class QuickNodeWebhookManager {
   private logger: Logger;
-  private httpUrl: string;
-  private apiKey: string;
+  
+  // 🆕 МУЛЬТИ-ПРОВАЙДЕР СИСТЕМА
+  private providers: RpcProvider[] = [];
+  private currentProviderIndex: number = 0;
+  
   private smDatabase: SmartMoneyDatabase | null = null;
   private telegramNotifier: TelegramNotifier | null = null;
   
@@ -54,20 +70,61 @@ export class QuickNodeWebhookManager {
   }>();
   private priceCache = new Map<string, { price: number; timestamp: number }>();
   
-  // 🔥 API RATE LIMITING
+  // 🔒 ЗАЩИТА ОТ RACE CONDITIONS
   private apiLimits: ApiLimits = {
-    requestsPerMinute: 30,        // Снижено с 60 до 30
-    requestsPerDay: 12000,        // Снижено с 86400 до 12000  
+    requestsPerMinute: 25,        // Консервативно для двух провайдеров
+    requestsPerDay: 10000,        // Снижено для безопасности
     currentMinuteRequests: 0,
     currentDayRequests: 0,
     minuteReset: Date.now() + 60000,
-    dayReset: Date.now() + 86400000
+    dayReset: Date.now() + 86400000,
+    lastRequestTime: 0
   };
+  
+  // 🔒 МЬЮТЕКСЫ ДЛЯ БЕЗОПАСНОСТИ
+  private apiLimitMutex: boolean = false;
+  private isPollingInProgress: boolean = false;
+  private providerSwitchMutex: boolean = false;
 
   constructor() {
     this.logger = Logger.getInstance();
-    this.httpUrl = process.env.QUICKNODE_HTTP_URL!;
-    this.apiKey = process.env.QUICKNODE_API_KEY!;
+    this.initializeProviders();
+    this.startHealthCheck();
+  }
+
+  // 🆕 ИНИЦИАЛИЗАЦИЯ ПРОВАЙДЕРОВ
+  private initializeProviders(): void {
+    // Основной провайдер - QuickNode
+    if (process.env.QUICKNODE_HTTP_URL && process.env.QUICKNODE_API_KEY) {
+      this.providers.push({
+        name: 'QuickNode',
+        url: process.env.QUICKNODE_HTTP_URL,
+        key: process.env.QUICKNODE_API_KEY,
+        isHealthy: true,
+        requestCount: 0,
+        errorCount: 0
+      });
+      this.logger.info('✅ QuickNode provider initialized');
+    }
+
+    // Резервный провайдер - Alchemy
+    if (process.env.ALCHEMY_HTTP_URL && process.env.ALCHEMY_API_KEY) {
+      this.providers.push({
+        name: 'Alchemy',
+        url: process.env.ALCHEMY_HTTP_URL,
+        key: process.env.ALCHEMY_API_KEY,
+        isHealthy: true,
+        requestCount: 0,
+        errorCount: 0
+      });
+      this.logger.info('✅ Alchemy provider initialized as fallback');
+    }
+
+    if (this.providers.length === 0) {
+      throw new Error('No RPC providers configured!');
+    }
+
+    this.logger.info(`🚀 Initialized ${this.providers.length} RPC providers`);
   }
 
   setDependencies(smDatabase: SmartMoneyDatabase, telegramNotifier: TelegramNotifier): void {
@@ -88,7 +145,7 @@ export class QuickNodeWebhookManager {
       ];
 
       const streamConfig: QuickNodeStreamConfig = {
-        name: 'smart-money-dex-monitor-optimized',
+        name: 'smart-money-dex-monitor-optimized-v2',
         webhook_url: webhookUrl,
         filters: [{
           program_id: dexPrograms,
@@ -100,7 +157,7 @@ export class QuickNodeWebhookManager {
       const endpoints = [
         'https://api.quicknode.com/v1/streams',
         `${this.getApiBaseUrl()}/streams`,
-        `${this.httpUrl.replace('/rpc', '')}/api/v1/streams`
+        `${this.providers[0]?.url?.replace('/rpc', '')}/api/v1/streams`
       ];
 
       let lastError: any = null;
@@ -119,9 +176,9 @@ export class QuickNodeWebhookManager {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'x-api-key': this.apiKey,
-              'Authorization': `Bearer ${this.apiKey}`,
-              'User-Agent': 'Solana-Smart-Money-Bot/3.0-Optimized'
+              'x-api-key': this.providers[0]?.key || '',
+              'Authorization': `Bearer ${this.providers[0]?.key || ''}`,
+              'User-Agent': 'Solana-Smart-Money-Bot/4.0-MultiProvider'
             },
             body: JSON.stringify(streamConfig)
           });
@@ -152,7 +209,7 @@ export class QuickNodeWebhookManager {
     }
   }
 
-  // 🔥 СУПЕР ОПТИМИЗИРОВАННЫЙ POLLING MODE
+  // 🔥 СУПЕР ОПТИМИЗИРОВАННЫЙ POLLING MODE С МУЛЬТИ-ПРОВАЙДЕРАМИ
   async startPollingMode(): Promise<void> {
     if (this.isPollingActive) return;
     if (!this.smDatabase || !this.telegramNotifier) {
@@ -160,31 +217,25 @@ export class QuickNodeWebhookManager {
       return;
     }
 
-    this.logger.info('🔄 Starting OPTIMIZED polling mode...');
+    this.logger.info('🔄 Starting OPTIMIZED multi-provider polling mode...');
     
     try {
       // Получаем только включенные Smart Money кошельки
       this.monitoredWallets = await this.smDatabase.getAllActiveSmartWallets();
       
-      // 🔥 ФИЛЬТРУЕМ ПО ПРИОРИТЕТУ - только high и medium
+      // 🔥 СТРОГИЕ ФИЛЬТРЫ
       this.monitoredWallets = this.monitoredWallets.filter(w => {
-        // Проверяем активность кошелька
         const daysSinceActive = (Date.now() - w.lastActiveAt.getTime()) / (1000 * 60 * 60 * 24);
-        if (daysSinceActive > 30) return false; // Только активные за последние 30 дней
-        
-        // Только с высоким performance score
+        if (daysSinceActive > 30) return false;
         if (w.performanceScore < 75) return false;
-        
-        // Только с хорошим win rate
         if (w.winRate < 65) return false;
-        
         return true;
-      }).slice(0, 20); // 🔥 МАКСИМУМ 20 кошельков!
+      }).slice(0, 20); // МАКСИМУМ 20 кошельков!
 
-      this.logger.info(`🎯 Monitoring ${this.monitoredWallets.length}/20 TOP Smart Money wallets (OPTIMIZED)`);
+      this.logger.info(`🎯 Monitoring ${this.monitoredWallets.length}/20 TOP Smart Money wallets (Multi-Provider)`);
       this.isPollingActive = true;
 
-      // 🚀 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: 15 секунд → 5 МИНУТ!
+      // 🚀 УВЕЛИЧЕННЫЙ ИНТЕРВАЛ: 5 МИНУТ
       this.pollingInterval = setInterval(async () => {
         try {
           if (this.canMakeRequest()) {
@@ -195,16 +246,16 @@ export class QuickNodeWebhookManager {
         } catch (error) {
           this.logger.error('❌ Error in polling cycle:', error);
         }
-      }, 5 * 60 * 1000); // 🔥 5 МИНУТ ВМЕСТО 15 СЕКУНД = -95% API REQUESTS!
+      }, 5 * 60 * 1000); // 🔥 5 МИНУТ
 
-      // Первый запуск через 10 секунд (без спешки)
+      // Первый запуск через 10 секунд
       setTimeout(() => {
         if (this.canMakeRequest()) {
           this.pollSmartMoneyWallets();
         }
       }, 10000);
 
-      this.logger.info('✅ OPTIMIZED polling mode started: 5min intervals, max 20 wallets');
+      this.logger.info('✅ OPTIMIZED multi-provider polling started: 5min intervals, max 20 wallets');
 
     } catch (error) {
       this.logger.error('❌ Failed to start optimized polling mode:', error);
@@ -220,14 +271,21 @@ export class QuickNodeWebhookManager {
     this.logger.info('🔴 Optimized polling mode stopped');
   }
 
-  // 🔥 ОПТИМИЗИРОВАННЫЙ МЕТОД POLLING
+  // 🔥 ЗАЩИЩЕННЫЙ ОТ RACE CONDITIONS POLLING
   private async pollSmartMoneyWallets(): Promise<void> {
+    // 🔒 ЗАЩИТА ОТ ПАРАЛЛЕЛЬНОГО ВЫПОЛНЕНИЯ
+    if (this.isPollingInProgress) {
+      this.logger.warn('⚠️ Polling already in progress, skipping...');
+      return;
+    }
+    
     if (!this.isPollingActive || this.monitoredWallets.length === 0) return;
 
     try {
+      this.isPollingInProgress = true;
       this.logger.info(`🔍 Polling ${this.monitoredWallets.length} Smart Money wallets...`);
       
-      // 🔥 ОБРАБАТЫВАЕМ МАКСИМУМ 3 КОШЕЛЬКА ЗА РАЗ (вместо 5)
+      // 🔥 ОБРАБАТЫВАЕМ МАКСИМУМ 3 КОШЕЛЬКА ЗА РАЗ
       const batchSize = 3;
       const batches = [];
       
@@ -235,7 +293,7 @@ export class QuickNodeWebhookManager {
         batches.push(this.monitoredWallets.slice(i, i + batchSize));
       }
 
-      // Обрабатываем каждый батч с увеличенными паузами
+      // Обрабатываем каждый батч с паузами
       for (const batch of batches) {
         if (!this.canMakeRequest()) {
           this.logger.warn('⚠️ API limit reached, stopping polling for this cycle');
@@ -245,7 +303,7 @@ export class QuickNodeWebhookManager {
         const promises = batch.map(wallet => this.checkWalletForNewTransactions(wallet));
         await Promise.allSettled(promises);
         
-        // 🔥 УВЕЛИЧЕННАЯ ПАУЗА между батчами: 5 секунд (было 2)
+        // 🔥 ПАУЗА между батчами: 5 секунд
         await this.sleep(5000);
       }
 
@@ -254,6 +312,9 @@ export class QuickNodeWebhookManager {
 
     } catch (error) {
       this.logger.error('❌ Error in optimized polling:', error);
+    } finally {
+      // 🔒 ВСЕГДА ОСВОБОЖДАЕМ ФЛАГ
+      this.isPollingInProgress = false;
     }
   }
 
@@ -272,7 +333,7 @@ export class QuickNodeWebhookManager {
       // Обновляем последнюю обработанную транзакцию
       this.lastProcessedSignatures.set(walletAddress, signatures[0].signature);
 
-      // 🔥 ОБРАБАТЫВАЕМ ТОЛЬКО ПЕРВЫЕ 3 ТРАНЗАКЦИИ (было без лимита)
+      // 🔥 ОБРАБАТЫВАЕМ ТОЛЬКО ПЕРВЫЕ 3 ТРАНЗАКЦИИ
       for (const sigInfo of signatures.slice(0, 3).reverse()) {
         try {
           if (!this.canMakeRequest()) break;
@@ -289,12 +350,144 @@ export class QuickNodeWebhookManager {
     }
   }
 
+  // 🆕 УНИВЕРСАЛЬНЫЙ МЕТОД RPC ЗАПРОСОВ С МУЛЬТИ-ПРОВАЙДЕРАМИ
+  private async makeRpcRequest(method: string, params: any[], maxRetries: number = 2): Promise<any> {
+    let lastError: any = null;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const provider = this.getCurrentProvider();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      
+      try {
+        const body = JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method,
+          params
+        });
+
+        const response = await fetch(provider.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          const data = await response.json();
+          
+          // Обновляем статистику провайдера
+          provider.requestCount++;
+          
+          this.logger.debug(`✅ ${provider.name} success: ${method}`);
+          return data;
+        } else {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+      } catch (error) {
+        clearTimeout(timeoutId);
+        lastError = error;
+        provider.errorCount++;
+        provider.lastError = error instanceof Error ? error.message : 'Unknown error';
+        provider.lastErrorTime = Date.now();
+        
+        this.logger.warn(`⚠️ ${provider.name} failed for ${method}: ${provider.lastError}`);
+        
+        // Переключаемся на следующий провайдер
+        await this.switchToNextProvider();
+      }
+    }
+
+    throw lastError || new Error(`All providers failed for ${method}`);
+  }
+
+  // 🆕 ПОЛУЧЕНИЕ ТЕКУЩЕГО ПРОВАЙДЕРА
+  private getCurrentProvider(): RpcProvider {
+    // Ищем здоровый провайдер
+    for (let i = 0; i < this.providers.length; i++) {
+      const provider = this.providers[this.currentProviderIndex];
+      if (provider.isHealthy) {
+        return provider;
+      }
+      this.currentProviderIndex = (this.currentProviderIndex + 1) % this.providers.length;
+    }
+    
+    // Если все нездоровы, возвращаем текущий
+    return this.providers[this.currentProviderIndex];
+  }
+
+  // 🆕 ПЕРЕКЛЮЧЕНИЕ НА СЛЕДУЮЩИЙ ПРОВАЙДЕР
+  private async switchToNextProvider(): Promise<void> {
+    if (this.providerSwitchMutex) return;
+    
+    this.providerSwitchMutex = true;
+    
+    const oldIndex = this.currentProviderIndex;
+    this.currentProviderIndex = (this.currentProviderIndex + 1) % this.providers.length;
+    
+    if (oldIndex !== this.currentProviderIndex) {
+      this.logger.info(`🔄 Switched from ${this.providers[oldIndex].name} to ${this.providers[this.currentProviderIndex].name}`);
+    }
+    
+    setTimeout(() => {
+      this.providerSwitchMutex = false;
+    }, 1000);
+  }
+
+  // 🆕 ПРОВЕРКА ЗДОРОВЬЯ ПРОВАЙДЕРОВ
+  private async startHealthCheck(): Promise<void> {
+    setInterval(async () => {
+      for (const provider of this.providers) {
+        const healthController = new AbortController();
+        const healthTimeoutId = setTimeout(() => healthController.abort(), 5000);
+        
+        try {
+          const startTime = Date.now();
+          await fetch(provider.url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'getSlot',
+              params: []
+            }),
+            signal: healthController.signal
+          });
+          
+          clearTimeout(healthTimeoutId);
+          
+          const responseTime = Date.now() - startTime;
+          const wasUnhealthy = !provider.isHealthy;
+          
+          provider.isHealthy = responseTime < 10000; // 10 секунд таймаут
+          
+          if (wasUnhealthy && provider.isHealthy) {
+            this.logger.info(`💚 ${provider.name} recovered (${responseTime}ms)`);
+          }
+          
+        } catch (error) {
+          clearTimeout(healthTimeoutId);
+          if (provider.isHealthy) {
+            this.logger.warn(`💔 ${provider.name} marked unhealthy`);
+          }
+          provider.isHealthy = false;
+        }
+      }
+    }, 2 * 60 * 1000); // Каждые 2 минуты
+  }
+
+  // 🔥 ОБНОВЛЕННЫЕ МЕТОДЫ С МУЛЬТИ-ПРОВАЙДЕРАМИ
   private async getWalletSignatures(walletAddress: string, beforeSignature?: string): Promise<Array<{signature: string; blockTime: number}>> {
     try {
       const params: any = [
         walletAddress,
         {
-          limit: 5, // Максимум 5 транзакций (было 10)
+          limit: 5,
           commitment: 'confirmed'
         }
       ];
@@ -303,29 +496,31 @@ export class QuickNodeWebhookManager {
         params[1].before = beforeSignature;
       }
 
-      const response = await fetch(this.httpUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getSignaturesForAddress',
-          params
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json() as any;
+      const data = await this.makeRpcRequest('getSignaturesForAddress', params);
       return data.result || [];
 
     } catch (error) {
       this.logger.error(`Error getting signatures for ${walletAddress}:`, error);
       return [];
+    }
+  }
+
+  private async getTransactionDetails(signature: string): Promise<any> {
+    try {
+      const data = await this.makeRpcRequest('getTransaction', [
+        signature,
+        {
+          encoding: 'jsonParsed',
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0
+        }
+      ]);
+
+      return data.result;
+
+    } catch (error) {
+      this.logger.error(`Error getting transaction details for ${signature}:`, error);
+      return null;
     }
   }
 
@@ -340,7 +535,6 @@ export class QuickNodeWebhookManager {
       const swaps = await this.extractSwapsFromTransaction(transaction, wallet);
       
       for (const swap of swaps) {
-        // 🔥 АГРЕССИВНЫЕ ФИЛЬТРЫ для Smart Money
         if (this.shouldProcessSmartMoneySwapOptimized(swap, wallet)) {
           await this.saveAndNotifySwap(swap);
           this.logger.info(`🔥 SM swap: ${swap.tokenSymbol} - $${swap.amountUSD.toFixed(0)}`);
@@ -349,38 +543,6 @@ export class QuickNodeWebhookManager {
 
     } catch (error) {
       this.logger.error(`Error processing transaction ${signature}:`, error);
-    }
-  }
-
-  private async getTransactionDetails(signature: string): Promise<any> {
-    try {
-      const response = await fetch(this.httpUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getTransaction',
-          params: [
-            signature,
-            {
-              encoding: 'jsonParsed',
-              commitment: 'confirmed',
-              maxSupportedTransactionVersion: 0
-            }
-          ]
-        })
-      });
-
-      if (!response.ok) return null;
-      const data = await response.json() as any;
-      return data.result;
-
-    } catch (error) {
-      this.logger.error(`Error getting transaction details for ${signature}:`, error);
-      return null;
     }
   }
 
@@ -405,7 +567,7 @@ export class QuickNodeWebhookManager {
         const postAmount = parseFloat(postBalance.uiTokenAmount.uiAmountString || '0');
         const difference = postAmount - preAmount;
 
-        if (Math.abs(difference) < 10) continue; // Минимум 10 токенов
+        if (Math.abs(difference) < 10) continue;
 
         const tokenMint = postBalance.mint;
         const tokenInfo = await this.getTokenInfoCached(tokenMint);
@@ -415,7 +577,6 @@ export class QuickNodeWebhookManager {
         
         const estimatedUSD = await this.estimateTokenValueUSDCached(tokenMint, tokenAmount);
 
-        // 🔥 УВЕЛИЧЕННЫЙ МИНИМУМ: $5K (было $1K)
         if (estimatedUSD > 5000) {
           const swap: SmartMoneySwap = {
             transactionId: transaction.transaction.signatures[0],
@@ -449,24 +610,20 @@ export class QuickNodeWebhookManager {
 
   // 🔥 АГРЕССИВНЫЕ ФИЛЬТРЫ ДЛЯ ЭКОНОМИИ API
   private shouldProcessSmartMoneySwapOptimized(swap: SmartMoneySwap, wallet: SmartMoneyWallet): boolean {
-    // 🔥 УВЕЛИЧЕННЫЕ МИНИМАЛЬНЫЕ СУММЫ
     const minAmounts: Record<string, number> = {
-      sniper: 8000,   // $8K для снайперов (было $3K)
-      hunter: 10000,  // $10K для хантеров (было $5K)
-      trader: 25000   // $25K для трейдеров (было $15K)
+      sniper: 8000,
+      hunter: 10000,
+      trader: 25000
     };
 
     const minAmount = minAmounts[wallet.category] || 10000;
     if (swap.amountUSD < minAmount) return false;
 
-    // 🔥 СТРОЖЕ ПО АКТИВНОСТИ: только 15 дней (было 30)
     const daysSinceActive = (Date.now() - wallet.lastActiveAt.getTime()) / (1000 * 60 * 60 * 24);
     if (daysSinceActive > 15) return false;
 
-    // 🔥 ПОВЫШЕННЫЙ win rate: 70% (было 65%)
     if (wallet.winRate < 70) return false;
 
-    // 🔥 МИНИМАЛЬНЫЙ performance score: 80 (было без ограничений)
     if (wallet.performanceScore < 80) return false;
 
     return true;
@@ -475,7 +632,7 @@ export class QuickNodeWebhookManager {
   // 🚀 КЕШИРОВАНИЕ ИНФОРМАЦИИ О ТОКЕНАХ (24 ЧАСА)
   private async getTokenInfoCached(tokenMint: string): Promise<{ symbol: string; name: string }> {
     const cached = this.tokenInfoCache.get(tokenMint);
-    if (cached && Date.now() - cached.timestamp < 24 * 60 * 60 * 1000) { // 24 часа кеш
+    if (cached && Date.now() - cached.timestamp < 24 * 60 * 60 * 1000) {
       return { symbol: cached.symbol, name: cached.name };
     }
 
@@ -514,12 +671,12 @@ export class QuickNodeWebhookManager {
   // 🚀 КЕШИРОВАНИЕ ЦЕН ТОКЕНОВ (5 МИНУТ)
   private async estimateTokenValueUSDCached(tokenMint: string, amount: number): Promise<number> {
     const cached = this.priceCache.get(tokenMint);
-    if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) { // 5 минут кеш
+    if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) {
       return cached.price * amount;
     }
 
     if (!this.canMakeRequest()) {
-      return amount * 0.01; // Fallback
+      return amount * 0.01;
     }
 
     try {
@@ -531,7 +688,6 @@ export class QuickNodeWebhookManager {
         if (data.pairs && data.pairs.length > 0) {
           const price = parseFloat(data.pairs[0].priceUsd || '0');
           
-          // Кешируем цену
           this.priceCache.set(tokenMint, {
             price,
             timestamp: Date.now()
@@ -544,12 +700,22 @@ export class QuickNodeWebhookManager {
       // Игнорируем ошибки
     }
 
-    return amount * 0.01; // Fallback
+    return amount * 0.01;
   }
 
-  // 🚀 API RATE LIMITING METHODS
+  // 🚀 УЛУЧШЕННЫЕ API RATE LIMITING METHODS С МЬЮТЕКСОМ
   private canMakeRequest(): boolean {
+    // 🔒 ЗАЩИТА ОТ RACE CONDITIONS
+    if (this.apiLimitMutex) {
+      return false;
+    }
+    
     const now = Date.now();
+    
+    // Дополнительная защита - минимальный интервал между запросами
+    if (now - this.apiLimits.lastRequestTime < 100) { // 100ms минимум
+      return false;
+    }
     
     // Сброс счетчиков
     if (now > this.apiLimits.minuteReset) {
@@ -567,22 +733,32 @@ export class QuickNodeWebhookManager {
   }
   
   private trackApiRequest(): void {
+    // 🔒 УСТАНАВЛИВАЕМ МЬЮТЕКС
+    this.apiLimitMutex = true;
+    
+    const now = Date.now();
     this.apiLimits.currentMinuteRequests++;
     this.apiLimits.currentDayRequests++;
+    this.apiLimits.lastRequestTime = now;
+    
+    // 🔒 ОСВОБОЖДАЕМ МЬЮТЕКС ЧЕРЕЗ МИНИМАЛЬНУЮ ЗАДЕРЖКУ
+    setTimeout(() => {
+      this.apiLimitMutex = false;
+    }, 10);
   }
   
   private logApiUsage(): void {
     const minuteUsage = (this.apiLimits.currentMinuteRequests / this.apiLimits.requestsPerMinute * 100).toFixed(1);
     const dayUsage = (this.apiLimits.currentDayRequests / this.apiLimits.requestsPerDay * 100).toFixed(1);
     
-    this.logger.info(`📊 API Usage: ${minuteUsage}% minute, ${dayUsage}% daily (${this.apiLimits.currentDayRequests}/${this.apiLimits.requestsPerDay})`);
+    const currentProvider = this.getCurrentProvider();
+    this.logger.info(`📊 API Usage: ${minuteUsage}% minute, ${dayUsage}% daily | Provider: ${currentProvider.name}`);
   }
 
   private async saveAndNotifySwap(swap: SmartMoneySwap): Promise<void> {
     try {
       if (!this.smDatabase || !this.telegramNotifier) return;
 
-      // Сохраняем в базу данных
       const stmt = this.smDatabase['db'].prepare(`
         INSERT OR IGNORE INTO smart_money_transactions (
           transaction_id, wallet_address, token_address, token_symbol, token_name,
@@ -594,11 +770,10 @@ export class QuickNodeWebhookManager {
 
       stmt.run(
         swap.transactionId, swap.walletAddress, swap.tokenAddress, swap.tokenSymbol, swap.tokenName,
-        swap.tokenAmount, swap.amountUSD, swap.swapType, swap.timestamp.toISOString(), 'Optimized-Polling',
+        swap.tokenAmount, swap.amountUSD, swap.swapType, swap.timestamp.toISOString(), 'Multi-Provider',
         swap.category, 0, null, swap.pnl, swap.winRate, swap.totalTrades
       );
 
-      // Отправляем уведомление
       await this.telegramNotifier.sendSmartMoneySwap(swap);
 
     } catch (error) {
@@ -610,9 +785,12 @@ export class QuickNodeWebhookManager {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  // СУЩЕСТВУЮЩИЕ МЕТОДЫ (без изменений)
+  // СУЩЕСТВУЮЩИЕ МЕТОДЫ С ОБНОВЛЕНИЯМИ
   private getApiBaseUrl(): string {
-    const baseUrl = this.httpUrl.replace(/\/$/, '');
+    const primaryProvider = this.providers[0];
+    if (!primaryProvider) return '';
+    
+    const baseUrl = primaryProvider.url.replace(/\/$/, '');
     return baseUrl.replace(/\/rpc$/, '') + '/api/v1';
   }
 
@@ -634,9 +812,9 @@ export class QuickNodeWebhookManager {
       const response = await fetch(`${this.getApiBaseUrl()}/streams/${streamId}`, {
         method: 'DELETE',
         headers: {
-          'x-api-key': this.apiKey,
-          'Authorization': `Bearer ${this.apiKey}`,
-          'User-Agent': 'Solana-Smart-Money-Bot/3.0-Optimized'
+          'x-api-key': this.providers[0]?.key || '',
+          'Authorization': `Bearer ${this.providers[0]?.key || ''}`,
+          'User-Agent': 'Solana-Smart-Money-Bot/4.0-MultiProvider'
         }
       });
 
@@ -663,9 +841,9 @@ export class QuickNodeWebhookManager {
       const response = await fetch(`${this.getApiBaseUrl()}/streams`, {
         method: 'GET',
         headers: {
-          'x-api-key': this.apiKey,
-          'Authorization': `Bearer ${this.apiKey}`,
-          'User-Agent': 'Solana-Smart-Money-Bot/3.0-Optimized'
+          'x-api-key': this.providers[0]?.key || '',
+          'Authorization': `Bearer ${this.providers[0]?.key || ''}`,
+          'User-Agent': 'Solana-Smart-Money-Bot/4.0-MultiProvider'
         }
       });
 
@@ -686,7 +864,7 @@ export class QuickNodeWebhookManager {
       if (streamId === 'polling-mode') {
         return { 
           isActive: this.isPollingActive, 
-          status: this.isPollingActive ? 'optimized-polling' : 'stopped' 
+          status: this.isPollingActive ? 'multi-provider-polling' : 'stopped' 
         };
       }
 
@@ -698,9 +876,9 @@ export class QuickNodeWebhookManager {
       const response = await fetch(`${this.getApiBaseUrl()}/streams/${streamId}`, {
         method: 'GET',
         headers: {
-          'x-api-key': this.apiKey,
-          'Authorization': `Bearer ${this.apiKey}`,
-          'User-Agent': 'Solana-Smart-Money-Bot/3.0-Optimized'
+          'x-api-key': this.providers[0]?.key || '',
+          'Authorization': `Bearer ${this.providers[0]?.key || ''}`,
+          'User-Agent': 'Solana-Smart-Money-Bot/4.0-MultiProvider'
         }
       });
 
@@ -727,7 +905,7 @@ export class QuickNodeWebhookManager {
       for (const stream of streams) {
         try {
           await this.deleteStream(stream.id);
-          await this.sleep(2000); // Увеличенная пауза
+          await this.sleep(2000);
         } catch (error) {
           this.logger.warn(`Failed to delete stream ${stream.id}:`, error);
         }
@@ -740,14 +918,26 @@ export class QuickNodeWebhookManager {
     }
   }
 
-  // СТАТИСТИКА ОПТИМИЗИРОВАННОГО POLLING
+  // 🆕 УЛУЧШЕННАЯ СТАТИСТИКА С МУЛЬТИ-ПРОВАЙДЕРАМИ
   getPollingStats() {
+    const providerStats = this.providers.map(p => ({
+      name: p.name,
+      isHealthy: p.isHealthy,
+      requestCount: p.requestCount,
+      errorCount: p.errorCount,
+      successRate: p.requestCount > 0 ? ((p.requestCount - p.errorCount) / p.requestCount * 100).toFixed(1) + '%' : '0%',
+      lastError: p.lastError,
+      lastErrorTime: p.lastErrorTime ? new Date(p.lastErrorTime).toISOString() : null
+    }));
+
     return {
       isActive: this.isPollingActive,
+      currentProvider: this.getCurrentProvider().name,
       monitoredWallets: this.monitoredWallets.length,
       processedWallets: this.lastProcessedSignatures.size,
       tokenCacheSize: this.tokenInfoCache.size,
       priceCacheSize: this.priceCache.size,
+      providers: providerStats,
       apiUsage: {
         currentMinute: this.apiLimits.currentMinuteRequests,
         maxMinute: this.apiLimits.requestsPerMinute,
@@ -761,7 +951,9 @@ export class QuickNodeWebhookManager {
         maxWallets: 20,
         tokenCacheTTL: '24 hours',
         priceCacheTTL: '5 minutes',
-        minTradeAmount: '$8K+'
+        minTradeAmount: '$8K+',
+        raceConditionProtection: 'enabled',
+        multiProviderFailover: 'enabled'
       }
     };
   }

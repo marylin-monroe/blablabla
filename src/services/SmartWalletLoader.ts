@@ -360,7 +360,11 @@ export class SmartWalletLoader {
 
       if (!this.config) {
         this.config = this.loadConfig();
+        if (!this.config) {
+          this.logger.warn('No config found for sync');
+          return { added: 0, updated: 0, disabled: 0 };
       }
+    }
 
       let added = 0, updated = 0, disabled = 0;
 
