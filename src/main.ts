@@ -1,4 +1,4 @@
-// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ
+// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -44,12 +44,14 @@ class SmartMoneyBotRunner {
 
     this.smartWalletLoader = new SmartWalletLoader(this.smDatabase, this.telegramNotifier);
 
+    // 🎯 SOLANA MONITOR ТЕПЕРЬ С АГРЕГАЦИЕЙ ПОЗИЦИЙ
     this.solanaMonitor = new SolanaMonitor(this.database, this.telegramNotifier);
     
     this.flowAnalyzer = new SmartMoneyFlowAnalyzer(this.smDatabase, this.telegramNotifier, this.database);
     
     this.walletDiscovery = new SmartWalletDiscovery(this.smDatabase, this.database);
     
+    // 🎯 WEBHOOK SERVER С ФИЛЬТРАМИ + АГРЕГАЦИЕЙ
     this.webhookServer = new WebhookServer(
       this.database, 
       this.telegramNotifier, 
@@ -59,7 +61,7 @@ class SmartMoneyBotRunner {
     
     this.webhookManager = new QuickNodeWebhookManager();
 
-    this.logger.info('✅ Smart Money Bot services initialized (OPTIMIZED)');
+    this.logger.info('✅ Smart Money Bot services initialized (OPTIMIZED + POSITION AGGREGATION)');
   }
 
   private validateEnvironment(): void {
@@ -136,11 +138,11 @@ class SmartMoneyBotRunner {
 
   async start(): Promise<void> {
     try {
-      this.logger.info('🚀 Starting OPTIMIZED Smart Money Bot System...');
+      this.logger.info('🚀 Starting OPTIMIZED Smart Money Bot System + POSITION AGGREGATION...');
 
       await this.database.init();
       await this.smDatabase.init();
-      this.logger.info('✅ Databases initialized');
+      this.logger.info('✅ Databases initialized (with position aggregation support)');
 
       const loadedWallets = await this.smartWalletLoader.loadWalletsFromConfig();
       this.logger.info(`📁 Loaded ${loadedWallets} Smart Money wallets from config`);
@@ -151,7 +153,7 @@ class SmartMoneyBotRunner {
       this.isRunning = true;
 
       await this.webhookServer.start();
-      this.logger.info('✅ Webhook server started');
+      this.logger.info('✅ Webhook server started (WITH POSITION AGGREGATION)');
 
       this.webhookManager.setDependencies(this.smDatabase, this.telegramNotifier);
 
@@ -163,11 +165,15 @@ class SmartMoneyBotRunner {
 
       this.startWalletDiscoveryOptimized();
 
-      this.logger.info('✅ OPTIMIZED Smart Money Bot started successfully!');
+      // 🎯 НОВЫЙ: Периодическая отправка статистики агрегации
+      this.startPositionAggregationReports();
+
+      this.logger.info('✅ OPTIMIZED Smart Money Bot started successfully + POSITION AGGREGATION!');
       this.logger.info('📊 Real-time DEX monitoring active (OPTIMIZED)');
       this.logger.info('🔍 Smart Money flow analysis running (4h intervals)');
       this.logger.info('🎯 Advanced insider detection enabled (LIMITED)');
       this.logger.info('⚠️ Family wallet detection disabled');
+      this.logger.info('🎯 Position splitting detection ENABLED');
 
       process.on('SIGINT', () => this.shutdown());
       process.on('SIGTERM', () => this.shutdown());
@@ -290,6 +296,31 @@ class SmartMoneyBotRunner {
     }
   }
 
+  // 🎯 НОВЫЙ МЕТОД: Получение статистики агрегации позиций
+  async getPositionAggregationStats(): Promise<void> {
+    try {
+      const stats = await this.database.getPositionAggregationStats();
+      const aggregationStats = this.solanaMonitor.getAggregationStats();
+      
+      await this.telegramNotifier.sendCycleLog(
+        `🎯 <b>Position Aggregation Statistics</b>\n\n` +
+        `📊 <b>Total Detected Positions:</b> <code>${stats.totalPositions}</code>\n` +
+        `🚨 <b>High Suspicion (75+):</b> <code>${stats.highSuspicionPositions}</code>\n` +
+        `💰 <b>Total Value:</b> <code>$${this.formatNumber(stats.totalValueUSD)}</code>\n` +
+        `📈 <b>Avg Suspicion Score:</b> <code>${stats.avgSuspicionScore.toFixed(1)}</code>\n\n` +
+        `🔄 <b>Active Monitoring:</b> <code>${aggregationStats.activePositions}</code> positions\n\n` +
+        `🏆 <b>Top Wallets by Positions:</b>\n` +
+        stats.topWalletsByPositions.slice(0, 5).map((wallet, i) => 
+          `<code>${i + 1}.</code> <code>${wallet.walletAddress.slice(0, 8)}...${wallet.walletAddress.slice(-4)}</code> - <code>${wallet.positionCount}</code> positions, <code>$${this.formatNumber(wallet.totalValueUSD)}</code>`
+        ).join('\n')
+      );
+      
+      this.logger.info(`📊 Position aggregation stats sent: ${stats.totalPositions} total positions`);
+    } catch (error) {
+      this.logger.error('Error getting position aggregation stats:', error);
+    }
+  }
+
   private async setupQuickNodeWebhook(): Promise<void> {
     try {
       let webhookURL: string;
@@ -329,13 +360,14 @@ class SmartMoneyBotRunner {
       const stats = await this.smDatabase.getWalletStats();
       const pollingStats = this.webhookManager.getPollingStats();
       const loaderStats = this.smartWalletLoader.getStats();
+      const dbStats = await this.database.getDatabaseStats();
       
       const monitoringMode = this.webhookId === 'polling-mode' ? 
         `🔄 <b>OPTIMIZED Polling Mode</b> (${pollingStats.monitoredWallets}/20 wallets, 5min intervals)` : 
         '📡 <b>Real-time Webhooks</b>';
 
       await this.telegramNotifier.sendCycleLog(
-        `🟢 <b>OPTIMIZED Smart Money Bot Online!</b>\n\n` +
+        `🟢 <b>OPTIMIZED Smart Money Bot Online + POSITION AGGREGATION!</b>\n\n` +
         `📊 Monitoring <code>${stats.active}</code> active wallets (<code>${stats.enabled}</code> enabled)\n` +
         `🔫 Snipers: <code>${stats.byCategory.sniper || 0}</code>\n` +
         `💡 Hunters: <code>${stats.byCategory.hunter || 0}</code>\n` +
@@ -349,13 +381,20 @@ class SmartMoneyBotRunner {
         `📈 Flow analysis: <b>Every 4 hours (OPTIMIZED)</b>\n` +
         `🔥 Hot token detection: <b>Every 4 hours</b>\n` +
         `🔍 Wallet discovery: <b>Every 2 weeks (LIMITED to 20 candidates)</b>\n` +
-        `⚠️ Family detection: <b>Disabled</b>\n\n` +
+        `⚠️ Family detection: <b>Disabled</b>\n` +
+        `🎯 Position splitting: <b>ENABLED for insider detection</b>\n\n` +
         `🚀 <b>API OPTIMIZATION ACTIVE:</b>\n` +
         `• Polling: 5min intervals (-95% requests)\n` +
         `• Token cache: 24h TTL\n` +
         `• Price cache: 5min TTL\n` +
         `• Min trade: $8K+ (strict filters)\n` +
         `• Max wallets: 20 (top performance only)\n\n` +
+        `🎯 <b>POSITION AGGREGATION:</b>\n` +
+        `• Detected positions: <code>${dbStats.positionAggregations}</code>\n` +
+        `• High suspicion: <code>${dbStats.highSuspicionPositions}</code>\n` +
+        `• Min amount: $10K+ total\n` +
+        `• Min purchases: 3+ similar sizes\n` +
+        `• Time window: 90 minutes\n\n` +
         `📝 Config updated: <code>${loaderStats?.lastUpdated}</code>`
       );
     } catch (error) {
@@ -521,6 +560,26 @@ class SmartMoneyBotRunner {
     this.logger.info('🔄 OPTIMIZED Periodic wallet discovery scheduled (2 weeks, LIMITED to 5 new wallets)');
   }
 
+  // 🎯 НОВЫЙ МЕТОД: Периодические отчеты по агрегации позиций
+  private startPositionAggregationReports(): void {
+    const sendAggregationReport = async () => {
+      if (!this.isRunning) return;
+      
+      try {
+        this.logger.info('📊 Sending position aggregation report...');
+        await this.getPositionAggregationStats();
+      } catch (error) {
+        this.logger.error('❌ Error sending position aggregation report:', error);
+      }
+    };
+
+    // Отправляем отчет каждые 12 часов
+    const reportInterval = setInterval(sendAggregationReport, 12 * 60 * 60 * 1000); // 12 часов
+    this.intervalIds.push(reportInterval);
+
+    this.logger.info('📊 Position aggregation reports scheduled (every 12 hours)');
+  }
+
   // 🔥 ОПТИМИЗИРОВАННОЕ ДЕАКТИВИРОВАНИЕ
   private async deactivateIneffectiveWalletsOptimized(): Promise<number> {
     const activeWallets = await this.smDatabase.getAllActiveSmartWallets();
@@ -571,8 +630,19 @@ class SmartMoneyBotRunner {
     return Math.min(score, 100);
   }
 
+  // 🎯 НОВЫЙ МЕТОД: Форматирование чисел
+  private formatNumber(num: number): string {
+    if (num >= 1_000_000) {
+      return `${(num / 1_000_000).toFixed(1)}M`;
+    } else if (num >= 1_000) {
+      return `${(num / 1_000).toFixed(1)}K`;
+    } else {
+      return num.toFixed(0);
+    }
+  }
+
   private async shutdown(): Promise<void> {
-    this.logger.info('🔴 Shutting down OPTIMIZED Smart Money Bot...');
+    this.logger.info('🔴 Shutting down OPTIMIZED Smart Money Bot + POSITION AGGREGATION...');
     
     this.isRunning = false;
     
@@ -605,12 +675,12 @@ class SmartMoneyBotRunner {
     }
     
     try {
-      await this.telegramNotifier.sendCycleLog('🔴 <b>OPTIMIZED Smart Money Bot stopped</b>');
+      await this.telegramNotifier.sendCycleLog('🔴 <b>OPTIMIZED Smart Money Bot stopped + POSITION AGGREGATION</b>');
     } catch (error) {
       this.logger.error('Failed to send shutdown notification:', error);
     }
     
-    this.logger.info('✅ OPTIMIZED Smart Money Bot shutdown completed');
+    this.logger.info('✅ OPTIMIZED Smart Money Bot shutdown completed + POSITION AGGREGATION');
     process.exit(0);
   }
 }
@@ -620,7 +690,7 @@ const main = async () => {
     const bot = new SmartMoneyBotRunner();
     await bot.start();
   } catch (error) {
-    console.error('💥 Fatal error starting OPTIMIZED Smart Money Bot:', error);
+    console.error('💥 Fatal error starting OPTIMIZED Smart Money Bot + POSITION AGGREGATION:', error);
     process.exit(1);
   }
 };

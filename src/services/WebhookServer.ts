@@ -1,4 +1,4 @@
-// src/services/WebhookServer.ts - С ФИЛЬТРАМИ SMART MONEY
+// src/services/WebhookServer.ts - С ФИЛЬТРАМИ SMART MONEY + АГРЕГАЦИЯ ПОЗИЦИЙ
 import express from 'express';
 import { Database } from './Database';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
@@ -158,14 +158,15 @@ export class WebhookServer {
       res.json({
         status: 'healthy',
         timestamp: new Date().toISOString(),
-        service: 'Smart Money Tracker Background Worker (WITH FILTERS)',
-        version: '3.1.0',
+        service: 'Smart Money Tracker Background Worker (WITH FILTERS + POSITION AGGREGATION)',
+        version: '3.2.0',
         uptime: process.uptime(),
         filters: {
           tokenCreatorCheck: 'enabled',
           topHolderFilter: 'enabled',
           relatedWalletDetection: 'enabled',
-          riskScoring: 'enabled'
+          riskScoring: 'enabled',
+          positionAggregation: 'enabled'
         }
       });
     });
@@ -193,7 +194,7 @@ export class WebhookServer {
         
         await this.telegramNotifier.sendCycleLog(
           '🧪 <b>Test notification</b>\n' +
-          `Background Worker is running correctly (WITH SMART MONEY FILTERS)\n` +
+          `Background Worker is running correctly (WITH SMART MONEY FILTERS + POSITION AGGREGATION)\n` +
           `Timestamp: <code>${new Date().toISOString()}</code>`
         );
 
@@ -222,7 +223,7 @@ export class WebhookServer {
           service: {
             uptime: process.uptime(),
             memory: process.memoryUsage(),
-            version: '3.1.0'
+            version: '3.2.0'
           },
           filters: {
             tokenInfoCacheSize: this.tokenInfoCache.size,
@@ -265,12 +266,16 @@ export class WebhookServer {
       const walletAddress = this.extractWalletAddress(swapEvent);
       if (!walletAddress) return;
 
+      // 🔍 ПРОВЕРЯЕМ: SMART MONEY ИЛИ ОБЫЧНЫЙ КОШЕЛЕК
       const smartWallet = await this.smDatabase.getSmartWallet(walletAddress);
+      
       if (!smartWallet || !smartWallet.isActive) {
+        // ✅ ОБЫЧНЫЙ КОШЕЛЕК - передаем в SolanaMonitor для агрегации
         await this.solanaMonitor.processTransaction(txData);
         return;
       }
 
+      // ✅ SMART MONEY КОШЕЛЕК - обрабатываем с фильтрами
       const swapInfo = await this.extractSwapInfo(txData, swapEvent, smartWallet);
       if (!swapInfo) return;
 
@@ -1024,10 +1029,11 @@ export class WebhookServer {
     return new Promise((resolve, reject) => {
       try {
         this.server = this.app.listen(this.port, '0.0.0.0', () => {
-          this.logger.info(`🌐 Background Worker webhook server started on port ${this.port} (WITH SMART MONEY FILTERS)`);
+          this.logger.info(`🌐 Background Worker webhook server started on port ${this.port} (WITH SMART MONEY FILTERS + POSITION AGGREGATION)`);
           this.logger.info(`📡 Webhook endpoint ready: http://localhost:${this.port}/webhook`);
           this.logger.info(`💊 Health check: http://localhost:${this.port}/health`);
           this.logger.info(`🚨 Smart Money filters: ENABLED`);
+          this.logger.info(`🎯 Position aggregation: ENABLED`);
           resolve();
         });
 
@@ -1071,7 +1077,8 @@ export class WebhookServer {
         enabled: true,
         tokenInfoCache: this.tokenInfoCache.size,
         holdersCache: this.topHoldersCache.size,
-        relatedWalletsCache: this.relatedWalletsCache.size
+        relatedWalletsCache: this.relatedWalletsCache.size,
+        positionAggregation: 'enabled'
       }
     };
   }

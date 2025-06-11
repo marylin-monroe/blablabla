@@ -1,4 +1,4 @@
-// src/services/Database.ts - ПОЛНАЯ ВЕРСИЯ со всеми методами
+// src/services/Database.ts - ПОЛНАЯ ВЕРСИЯ со всеми методами + АГРЕГАЦИЯ
 import BetterSqlite3 from 'better-sqlite3';
 import { TokenSwap, WalletInfo } from '../types';
 import { Logger } from '../utils/Logger';
@@ -79,13 +79,36 @@ export class Database {
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- 🎯 НОВАЯ ТАБЛИЦА ДЛЯ АГРЕГАЦИИ ПОЗИЦИЙ
+        CREATE TABLE IF NOT EXISTS position_aggregations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          wallet_address TEXT NOT NULL,
+          token_address TEXT NOT NULL,
+          token_symbol TEXT NOT NULL,
+          token_name TEXT NOT NULL,
+          total_usd REAL NOT NULL,
+          purchase_count INTEGER NOT NULL,
+          avg_purchase_size REAL NOT NULL,
+          time_window_minutes REAL NOT NULL,
+          suspicion_score INTEGER NOT NULL,
+          size_tolerance REAL NOT NULL,
+          first_buy_time DATETIME NOT NULL,
+          last_buy_time DATETIME NOT NULL,
+          purchase_details TEXT NOT NULL, -- JSON массив покупок
+          detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(wallet_address, token_address, first_buy_time)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_transactions_wallet ON transactions(wallet_address);
         CREATE INDEX IF NOT EXISTS idx_transactions_token ON transactions(token_address);
         CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp);
         CREATE INDEX IF NOT EXISTS idx_token_patterns_pattern ON token_name_patterns(pattern);
+        CREATE INDEX IF NOT EXISTS idx_position_aggregations_wallet ON position_aggregations(wallet_address);
+        CREATE INDEX IF NOT EXISTS idx_position_aggregations_token ON position_aggregations(token_address);
+        CREATE INDEX IF NOT EXISTS idx_position_aggregations_score ON position_aggregations(suspicion_score);
       `);
 
-      this.logger.info('Database initialized successfully');
+      this.logger.info('Database initialized successfully (with position aggregation support)');
     } catch (error) {
       this.logger.error('Error initializing database:', error);
       throw error;
@@ -227,7 +250,187 @@ export class Database {
     return rows.map(row => this.mapRowToTokenSwap(row));
   }
 
-  // Методы для Token Name Alerts
+  // 🎯 НОВЫЙ МЕТОД: получение транзакций по токену (для агрегации)
+  async getTransactionsByTokenAddress(tokenAddress: string, limit: number = 100): Promise<TokenSwap[]> {
+    const rows = this.db.prepare(`
+      SELECT * FROM transactions 
+      WHERE token_address = ? 
+      ORDER BY timestamp DESC 
+      LIMIT ?
+    `).all(tokenAddress, limit) as any[];
+
+    return rows.map(row => this.mapRowToTokenSwap(row));
+  }
+
+  // 🎯 НОВЫЕ МЕТОДЫ ДЛЯ АГРЕГАЦИИ ПОЗИЦИЙ
+
+  // Сохранение агрегированной позиции
+  async savePositionAggregation(aggregation: {
+    walletAddress: string;
+    tokenAddress: string;
+    tokenSymbol: string;
+    tokenName: string;
+    totalUSD: number;
+    purchaseCount: number;
+    avgPurchaseSize: number;
+    timeWindowMinutes: number;
+    suspicionScore: number;
+    sizeTolerance: number;
+    firstBuyTime: Date;
+    lastBuyTime: Date;
+    purchases: Array<{
+      transactionId: string;
+      amountUSD: number;
+      timestamp: Date;
+    }>;
+  }): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO position_aggregations (
+        wallet_address, token_address, token_symbol, token_name,
+        total_usd, purchase_count, avg_purchase_size, time_window_minutes,
+        suspicion_score, size_tolerance, first_buy_time, last_buy_time,
+        purchase_details
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      aggregation.walletAddress,
+      aggregation.tokenAddress,
+      aggregation.tokenSymbol,
+      aggregation.tokenName,
+      aggregation.totalUSD,
+      aggregation.purchaseCount,
+      aggregation.avgPurchaseSize,
+      aggregation.timeWindowMinutes,
+      aggregation.suspicionScore,
+      aggregation.sizeTolerance,
+      aggregation.firstBuyTime.toISOString(),
+      aggregation.lastBuyTime.toISOString(),
+      JSON.stringify(aggregation.purchases)
+    );
+
+    this.logger.info(`💾 Saved position aggregation: ${aggregation.tokenSymbol} - $${aggregation.totalUSD} (score: ${aggregation.suspicionScore})`);
+  }
+
+  // Получение агрегированных позиций по score
+  async getPositionAggregationsByScore(minScore: number = 75, limit: number = 50): Promise<Array<{
+    id: number;
+    walletAddress: string;
+    tokenAddress: string;
+    tokenSymbol: string;
+    tokenName: string;
+    totalUSD: number;
+    purchaseCount: number;
+    avgPurchaseSize: number;
+    timeWindowMinutes: number;
+    suspicionScore: number;
+    sizeTolerance: number;
+    firstBuyTime: Date;
+    lastBuyTime: Date;
+    detectedAt: Date;
+    purchases: Array<{
+      transactionId: string;
+      amountUSD: number;
+      timestamp: Date;
+    }>;
+  }>> {
+    const rows = this.db.prepare(`
+      SELECT * FROM position_aggregations 
+      WHERE suspicion_score >= ? 
+      ORDER BY suspicion_score DESC, total_usd DESC
+      LIMIT ?
+    `).all(minScore, limit) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      walletAddress: row.wallet_address,
+      tokenAddress: row.token_address,
+      tokenSymbol: row.token_symbol,
+      tokenName: row.token_name,
+      totalUSD: row.total_usd,
+      purchaseCount: row.purchase_count,
+      avgPurchaseSize: row.avg_purchase_size,
+      timeWindowMinutes: row.time_window_minutes,
+      suspicionScore: row.suspicion_score,
+      sizeTolerance: row.size_tolerance,
+      firstBuyTime: new Date(row.first_buy_time),
+      lastBuyTime: new Date(row.last_buy_time),
+      detectedAt: new Date(row.detected_at),
+      purchases: JSON.parse(row.purchase_details)
+    }));
+  }
+
+  // Получение агрегированных позиций по кошельку
+  async getPositionAggregationsByWallet(walletAddress: string): Promise<Array<{
+    id: number;
+    tokenAddress: string;
+    tokenSymbol: string;
+    totalUSD: number;
+    purchaseCount: number;
+    suspicionScore: number;
+    detectedAt: Date;
+  }>> {
+    const rows = this.db.prepare(`
+      SELECT id, token_address, token_symbol, total_usd, purchase_count, suspicion_score, detected_at
+      FROM position_aggregations 
+      WHERE wallet_address = ? 
+      ORDER BY detected_at DESC
+    `).all(walletAddress) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      tokenAddress: row.token_address,
+      tokenSymbol: row.token_symbol,
+      totalUSD: row.total_usd,
+      purchaseCount: row.purchase_count,
+      suspicionScore: row.suspicion_score,
+      detectedAt: new Date(row.detected_at)
+    }));
+  }
+
+  // Статистика агрегированных позиций
+  async getPositionAggregationStats(): Promise<{
+    totalPositions: number;
+    highSuspicionPositions: number; // score >= 75
+    totalValueUSD: number;
+    avgSuspicionScore: number;
+    topWalletsByPositions: Array<{
+      walletAddress: string;
+      positionCount: number;
+      totalValueUSD: number;
+    }>;
+  }> {
+    const totalPositions = this.db.prepare('SELECT COUNT(*) as count FROM position_aggregations').get() as any;
+    
+    const highSuspicion = this.db.prepare(
+      'SELECT COUNT(*) as count FROM position_aggregations WHERE suspicion_score >= 75'
+    ).get() as any;
+    
+    const totalValue = this.db.prepare('SELECT SUM(total_usd) as sum FROM position_aggregations').get() as any;
+    
+    const avgScore = this.db.prepare('SELECT AVG(suspicion_score) as avg FROM position_aggregations').get() as any;
+    
+    const topWallets = this.db.prepare(`
+      SELECT wallet_address, COUNT(*) as position_count, SUM(total_usd) as total_value
+      FROM position_aggregations 
+      GROUP BY wallet_address 
+      ORDER BY position_count DESC, total_value DESC 
+      LIMIT 10
+    `).all() as any[];
+
+    return {
+      totalPositions: totalPositions.count,
+      highSuspicionPositions: highSuspicion.count,
+      totalValueUSD: totalValue.sum || 0,
+      avgSuspicionScore: avgScore.avg || 0,
+      topWalletsByPositions: topWallets.map(row => ({
+        walletAddress: row.wallet_address,
+        positionCount: row.position_count,
+        totalValueUSD: row.total_value
+      }))
+    };
+  }
+
   // Методы для Token Name Alerts
   async checkTokenNamePattern(tokenName: string, tokenAddress: string, holders: number): Promise<{
     shouldAlert: boolean;
@@ -317,6 +520,8 @@ export class Database {
     totalWallets: number;
     last24hTransactions: number;
     avgTransactionSize: number;
+    positionAggregations: number;
+    highSuspicionPositions: number;
   }> {
     const totalTransactions = this.db.prepare('SELECT COUNT(*) as count FROM transactions').get() as any;
     const totalWallets = this.db.prepare('SELECT COUNT(*) as count FROM wallets').get() as any;
@@ -327,12 +532,19 @@ export class Database {
     ).get(last24h) as any;
     
     const avgSize = this.db.prepare('SELECT AVG(amount_usd) as avg FROM transactions').get() as any;
+    
+    const positionAggregations = this.db.prepare('SELECT COUNT(*) as count FROM position_aggregations').get() as any;
+    const highSuspicionPositions = this.db.prepare(
+      'SELECT COUNT(*) as count FROM position_aggregations WHERE suspicion_score >= 75'
+    ).get() as any;
 
     return {
       totalTransactions: totalTransactions.count,
       totalWallets: totalWallets.count,
       last24hTransactions: last24hTransactions.count,
-      avgTransactionSize: avgSize.avg || 0
+      avgTransactionSize: avgSize.avg || 0,
+      positionAggregations: positionAggregations.count,
+      highSuspicionPositions: highSuspicionPositions.count
     };
   }
 
@@ -376,17 +588,6 @@ export class Database {
   }
 
   // Методы для совместимости с другими сервисами
-  async getTransactionsByTokenAddress(tokenAddress: string, limit: number = 100): Promise<TokenSwap[]> {
-    const rows = this.db.prepare(`
-      SELECT * FROM transactions 
-      WHERE token_address = ? 
-      ORDER BY timestamp DESC 
-      LIMIT ?
-    `).all(tokenAddress, limit) as any[];
-
-    return rows.map(row => this.mapRowToTokenSwap(row));
-  }
-
   async getWalletsWithHighSuspicionScore(threshold: number = 70): Promise<WalletInfo[]> {
     const rows = this.db.prepare(`
       SELECT * FROM wallets 

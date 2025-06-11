@@ -1,4 +1,4 @@
-// src/types/index.ts - БЕЗ Family Detection
+// src/types/index.ts - БЕЗ Family Detection + АГРЕГАЦИЯ ПОЗИЦИЙ
 export interface TokenSwap {
   transactionId: string;
   walletAddress: string;
@@ -202,6 +202,114 @@ export interface SmartMoneySwap {
   familyId?: undefined; // всегда undefined
 }
 
+// 🎯 НОВЫЕ ТИПЫ ДЛЯ АГРЕГАЦИИ ПОЗИЦИЙ
+
+// Покупка в составе позиции
+export interface PositionPurchase {
+  transactionId: string;
+  amountUSD: number;
+  tokenAmount: number;
+  price: number;
+  timestamp: Date;
+}
+
+// Агрегированная позиция
+export interface AggregatedPosition {
+  walletAddress: string;
+  tokenAddress: string;
+  tokenSymbol: string;
+  tokenName: string;
+  
+  // Покупки
+  purchases: PositionPurchase[];
+  totalUSD: number;
+  totalTokens: number;
+  avgPrice: number;
+  purchaseCount: number;
+  
+  // Временные рамки
+  firstBuyTime: Date;
+  lastBuyTime: Date;
+  timeWindowMinutes: number;
+  
+  // Метрики разбивки
+  avgPurchaseSize: number;
+  maxPurchaseSize: number;
+  minPurchaseSize: number;
+  sizeStandardDeviation: number;
+  sizeCoefficient: number; // Коэффициент вариации
+  
+  // Детекция паттерна
+  hasSimilarSizes: boolean;
+  sizeTolerance: number; // В процентах
+  suspicionScore: number; // 0-100
+}
+
+// Алерт о разбивке позиции
+export interface PositionSplittingAlert {
+  walletAddress: string;
+  tokenAddress: string;
+  tokenSymbol: string;
+  tokenName: string;
+  totalUSD: number;
+  purchaseCount: number;
+  avgPurchaseSize: number;
+  timeWindowMinutes: number;
+  suspicionScore: number;
+  sizeTolerance: number;
+  firstBuyTime: Date;
+  lastBuyTime: Date;
+  purchases: Array<{
+    amountUSD: number;
+    timestamp: Date;
+    transactionId: string;
+  }>;
+}
+
+// Сохраненная агрегация в БД
+export interface SavedPositionAggregation {
+  id: number;
+  walletAddress: string;
+  tokenAddress: string;
+  tokenSymbol: string;
+  tokenName: string;
+  totalUSD: number;
+  purchaseCount: number;
+  avgPurchaseSize: number;
+  timeWindowMinutes: number;
+  suspicionScore: number;
+  sizeTolerance: number;
+  firstBuyTime: Date;
+  lastBuyTime: Date;
+  detectedAt: Date;
+  purchases: Array<{
+    transactionId: string;
+    amountUSD: number;
+    timestamp: Date;
+  }>;
+}
+
+// Статистика агрегации
+export interface PositionAggregationStats {
+  totalPositions: number;
+  highSuspicionPositions: number; // score >= 75
+  totalValueUSD: number;
+  avgSuspicionScore: number;
+  topWalletsByPositions: Array<{
+    walletAddress: string;
+    positionCount: number;
+    totalValueUSD: number;
+  }>;
+}
+
+// Группа похожих покупок
+export interface SimilarPurchaseGroup {
+  count: number;
+  avgAmount: number;
+  tolerance: number;
+  amounts: number[];
+}
+
 // Family типы УДАЛЕНЫ - больше не используются
 // export interface FamilyWalletCluster - УДАЛЕН
 
@@ -227,4 +335,48 @@ export interface WalletAnalysisResult {
   metrics: WalletPerformanceMetrics;
   familyConnections: []; // всегда пустой массив
   disqualificationReasons: string[];
+}
+
+// 🎯 КОНФИГУРАЦИЯ ДЕТЕКЦИИ АГРЕГАЦИИ
+export interface PositionDetectionConfig {
+  // Временное окно для агрегации
+  timeWindowMinutes: number;        // 90 минут по умолчанию
+  
+  // Критерии разбивки позиции
+  minPurchaseCount: number;         // Минимум 3 покупки
+  minTotalUSD: number;              // Минимум $10K общая сумма
+  maxIndividualUSD: number;         // Максимум $8K за одну покупку
+  
+  // Детекция похожих сумм
+  similarSizeTolerance: number;     // 2% отклонение считается "одинаковой суммой"
+  minSimilarPurchases: number;      // Минимум 3 похожие покупки
+  
+  // Другие фильтры
+  positionTimeoutMinutes: number;   // 180 минут таймаут для закрытия позиции
+  minSuspicionScore: number;        // Минимальный score для алерта
+  
+  // Фильтры кошельков
+  minWalletAge: number;            // Минимум 7 дней возраст кошелька
+  maxWalletActivity: number;       // Максимум 100 транзакций за день (анти-бот)
+}
+
+// 🎯 РЕЗУЛЬТАТ ФИЛЬТРАЦИИ КОШЕЛЬКА
+export interface WalletFilterResult {
+  passed: boolean;
+  reason?: string;
+}
+
+// 🎯 СТАТИСТИКА АГРЕГАТОРА
+export interface AggregationStats {
+  activePositions: number;
+  config: PositionDetectionConfig;
+  positions: Array<{
+    wallet: string;
+    token: string;
+    purchases: number;
+    totalUSD: number;
+    suspicionScore: number;
+    hasSimilarSizes: boolean;
+    timeWindow: number;
+  }>;
 }

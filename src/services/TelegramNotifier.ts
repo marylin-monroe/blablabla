@@ -1,7 +1,28 @@
-// src/services/TelegramNotifier.ts - БЕЗ Family Detection
+// src/services/TelegramNotifier.ts - БЕЗ Family Detection + АГРЕГАЦИЯ ПОЗИЦИЙ
 import TelegramBot from 'node-telegram-bot-api';
 import { TokenSwap, WalletInfo, SmartMoneyReport, InsiderAlert, SmartMoneyFlow, HotNewToken, SmartMoneySwap } from '../types';
 import { Logger } from '../utils/Logger';
+
+// 🎯 ИНТЕРФЕЙС ДЛЯ АЛЕРТА РАЗБИВКИ ПОЗИЦИИ
+interface PositionSplittingAlert {
+  walletAddress: string;
+  tokenAddress: string;
+  tokenSymbol: string;
+  tokenName: string;
+  totalUSD: number;
+  purchaseCount: number;
+  avgPurchaseSize: number;
+  timeWindowMinutes: number;
+  suspicionScore: number;
+  sizeTolerance: number;
+  firstBuyTime: Date;
+  lastBuyTime: Date;
+  purchases: Array<{
+    amountUSD: number;
+    timestamp: Date;
+    transactionId: string;
+  }>;
+}
 
 export class TelegramNotifier {
   private bot: TelegramBot;
@@ -13,6 +34,150 @@ export class TelegramNotifier {
     this.userId = userId;
     this.logger = Logger.getInstance();
   }
+
+  // 🎯 НОВЫЙ МЕТОД: Алерт о разбивке позиции
+  async sendPositionSplittingAlert(alert: PositionSplittingAlert): Promise<void> {
+    try {
+      const walletShort = this.truncateAddress(alert.walletAddress);
+      const timeSpanText = this.formatTimeSpan(alert.timeWindowMinutes);
+      
+      // Группируем покупки по схожим суммам для отображения
+      const purchaseGroups = this.groupSimilarPurchases(alert.purchases);
+      const topGroup = purchaseGroups[0]; // Самая большая группа
+      
+      // Основное сообщение
+      let message = `🎯🚨 <b>POSITION SPLITTING DETECTED</b> 🚨🎯
+
+💰 <b>Total:</b> <code>$${this.formatNumber(alert.totalUSD)}</code> in <code>${alert.purchaseCount}</code> purchases
+🪙 <b>Token:</b> <code>#${alert.tokenSymbol}</code>
+👤 <b>Wallet:</b> <code>${walletShort}</code>
+⏱️ <b>Time span:</b> <code>${timeSpanText}</code>
+🎯 <b>Suspicion Score:</b> <code>${alert.suspicionScore}/100</code>
+
+💡 <b>Pattern Analysis:</b>
+• Average size: <code>$${this.formatNumber(alert.avgPurchaseSize)}</code>
+• Size tolerance: <code>${alert.sizeTolerance.toFixed(2)}%</code>
+• Similar purchases: <code>${topGroup.count}/${alert.purchaseCount}</code>
+• Group avg: <code>$${this.formatNumber(topGroup.avgAmount)}</code>
+
+<a href="https://solscan.io/account/${alert.walletAddress}">Wallet</a> | <a href="https://solscan.io/token/${alert.tokenAddress}">Token</a> | <a href="https://dexscreener.com/solana/${alert.tokenAddress}">Chart</a>
+
+<code>#PositionSplitting #InsiderAlert #Solana</code>`;
+
+      await this.bot.sendMessage(this.userId, message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+      // Если много покупок - отправляем детальный breakdown
+      if (alert.purchaseCount >= 5) {
+        await this.sendDetailedPurchaseBreakdown(alert);
+      }
+
+      this.logger.info(`🎯 Position splitting alert sent: ${alert.tokenSymbol} - $${alert.totalUSD} in ${alert.purchaseCount} purchases`);
+    } catch (error) {
+      this.logger.error('Error sending position splitting alert:', error);
+    }
+  }
+
+  // 🎯 ДЕТАЛЬНЫЙ BREAKDOWN ПОКУПОК
+  private async sendDetailedPurchaseBreakdown(alert: PositionSplittingAlert): Promise<void> {
+    try {
+      // Сортируем покупки по времени
+      const sortedPurchases = alert.purchases.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+      
+      let breakdown = `📊 <b>Detailed Purchase Breakdown</b>\n\n`;
+      breakdown += `🎯 <b>Token:</b> <code>#${alert.tokenSymbol}</code>\n`;
+      breakdown += `👤 <b>Wallet:</b> <code>${this.truncateAddress(alert.walletAddress)}</code>\n\n`;
+
+      // Показываем каждую покупку
+      sortedPurchases.forEach((purchase, index) => {
+        const timeStr = this.formatTime(purchase.timestamp);
+        breakdown += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <b>$${this.formatNumber(purchase.amountUSD)}</b> at <code>${timeStr}</code>\n`;
+      });
+
+      // Группируем по схожим суммам
+      const groups = this.groupSimilarPurchases(alert.purchases);
+      if (groups.length > 1) {
+        breakdown += `\n🔍 <b>Similar Amount Groups:</b>\n`;
+        groups.forEach((group, index) => {
+          breakdown += `<code>${index + 1}.</code> <code>${group.count}x</code> ~<b>$${this.formatNumber(group.avgAmount)}</b> (±${group.tolerance.toFixed(1)}%)\n`;
+        });
+      }
+
+      breakdown += `\n<code>#PurchaseBreakdown</code>`;
+
+      await this.bot.sendMessage(this.userId, breakdown, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      });
+
+    } catch (error) {
+      this.logger.error('Error sending detailed purchase breakdown:', error);
+    }
+  }
+
+  // 🎯 ГРУППИРОВКА ПОХОЖИХ ПОКУПОК
+  private groupSimilarPurchases(purchases: Array<{amountUSD: number; timestamp: Date; transactionId: string}>): Array<{
+    count: number;
+    avgAmount: number;
+    tolerance: number;
+    amounts: number[];
+  }> {
+    const tolerance = 2.0; // 2% толерантность
+    const groups: Array<{
+      count: number;
+      avgAmount: number;
+      tolerance: number;
+      amounts: number[];
+    }> = [];
+
+    const amounts = purchases.map(p => p.amountUSD);
+    const processed = new Set<number>();
+
+    for (const amount of amounts) {
+      if (processed.has(amount)) continue;
+
+      const similarAmounts = amounts.filter(a => {
+        const diff = Math.abs(a - amount) / amount * 100;
+        return diff <= tolerance;
+      });
+
+      if (similarAmounts.length >= 2) {
+        similarAmounts.forEach(a => processed.add(a));
+        
+        const avgAmount = similarAmounts.reduce((sum, a) => sum + a, 0) / similarAmounts.length;
+        const maxDev = Math.max(...similarAmounts.map(a => Math.abs(a - avgAmount) / avgAmount * 100));
+        
+        groups.push({
+          count: similarAmounts.length,
+          avgAmount,
+          tolerance: maxDev,
+          amounts: similarAmounts
+        });
+      }
+    }
+
+    // Сортируем по количеству в группе (убывание)
+    return groups.sort((a, b) => b.count - a.count);
+  }
+
+  // 🎯 ФОРМАТИРОВАНИЕ ВРЕМЕННОГО ПРОМЕЖУТКА
+  private formatTimeSpan(minutes: number): string {
+    if (minutes < 60) {
+      return `${Math.round(minutes)}m`;
+    } else if (minutes < 1440) { // меньше дня
+      const hours = Math.floor(minutes / 60);
+      const mins = Math.round(minutes % 60);
+      return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    } else {
+      const days = Math.floor(minutes / 1440);
+      const hours = Math.floor((minutes % 1440) / 60);
+      return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+    }
+  }
+
+  // СУЩЕСТВУЮЩИЕ МЕТОДЫ (без изменений)
 
   // Метод для отправки топ притоков Smart Money
   async sendTopSmartMoneyInflows(inflows: SmartMoneyFlow[]): Promise<void> {
