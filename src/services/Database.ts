@@ -1,4 +1,4 @@
-// src/services/Database.ts - ПОЛНАЯ ВЕРСИЯ со всеми методами + АГРЕГАЦИЯ + НОВЫЕ ПОЛЯ
+// src/services/Database.ts - ПОЛНАЯ ВЕРСИЯ со всеми методами + АГРЕГАЦИЯ + НОВЫЕ ПОЛЯ - ИСПРАВЛЕННЫЙ
 import BetterSqlite3 from 'better-sqlite3';
 import { TokenSwap, WalletInfo } from '../types';
 import { Logger } from '../utils/Logger';
@@ -23,6 +23,7 @@ export class Database {
 
   async init(): Promise<void> {
     try {
+      // 🔧 ИСПРАВЛЕНО: СОЗДАЕМ ВСЕ ТАБЛИЦЫ СНАЧАЛА
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS token_swaps (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,7 +47,6 @@ export class Database {
           time_to_target TEXT,
           swap_type TEXT CHECK (swap_type IN ('buy', 'sell')),
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          -- 🆕 НОВЫЕ ПОЛЯ ДЛЯ POSITION AGGREGATION
           is_aggregated BOOLEAN DEFAULT 0,
           aggregation_id INTEGER,
           suspicion_score INTEGER DEFAULT 0,
@@ -73,7 +73,6 @@ export class Database {
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- Таблица для Token Name Alerts
         CREATE TABLE IF NOT EXISTS token_name_patterns (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           pattern TEXT NOT NULL,
@@ -84,7 +83,6 @@ export class Database {
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- 🎯 НОВАЯ ТАБЛИЦА ДЛЯ АГРЕГАЦИИ ПОЗИЦИЙ
         CREATE TABLE IF NOT EXISTS position_aggregations (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           wallet_address TEXT NOT NULL,
@@ -99,9 +97,8 @@ export class Database {
           size_tolerance REAL NOT NULL,
           first_buy_time DATETIME NOT NULL,
           last_buy_time DATETIME NOT NULL,
-          purchase_details TEXT NOT NULL, -- JSON массив покупок
+          purchase_details TEXT NOT NULL,
           detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          -- 🆕 ДОПОЛНИТЕЛЬНЫЕ ПОЛЯ ДЛЯ АНАЛИЗА
           max_purchase_size REAL DEFAULT 0,
           min_purchase_size REAL DEFAULT 0,
           size_std_deviation REAL DEFAULT 0,
@@ -114,20 +111,18 @@ export class Database {
           UNIQUE(wallet_address, token_address, first_buy_time)
         );
 
-        -- 🆕 НОВАЯ ТАБЛИЦА ДЛЯ ДЕТЕКЦИИ ИНСАЙДЕРОВ
         CREATE TABLE IF NOT EXISTS insider_alerts (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           wallet_address TEXT NOT NULL,
           detection_method TEXT NOT NULL,
           confidence_score INTEGER NOT NULL,
-          evidence_data TEXT NOT NULL, -- JSON с доказательствами
+          evidence_data TEXT NOT NULL,
           alert_type TEXT NOT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           processed BOOLEAN DEFAULT 0,
           reported BOOLEAN DEFAULT 0
         );
 
-        -- 🆕 НОВАЯ ТАБЛИЦА ДЛЯ PROVIDER СТАТИСТИКИ
         CREATE TABLE IF NOT EXISTS provider_stats (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           provider_name TEXT NOT NULL,
@@ -142,23 +137,29 @@ export class Database {
           daily_errors INTEGER DEFAULT 0,
           daily_reset DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+      `);
 
-        CREATE INDEX IF NOT EXISTS idx_transactions_wallet ON transactions(wallet_address);
-        CREATE INDEX IF NOT EXISTS idx_transactions_token ON transactions(token_address);
-        CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp);
+      // 🔧 ИСПРАВЛЕНО: СОЗДАЕМ ИНДЕКСЫ ТОЛЬКО ПОСЛЕ ВСЕХ ТАБЛИЦ
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_token_swaps_wallet ON token_swaps(wallet_address);
+        CREATE INDEX IF NOT EXISTS idx_token_swaps_token ON token_swaps(token_address);
+        CREATE INDEX IF NOT EXISTS idx_token_swaps_timestamp ON token_swaps(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_token_swaps_aggregated ON token_swaps(is_aggregated);
+        CREATE INDEX IF NOT EXISTS idx_token_swaps_aggregation_id ON token_swaps(aggregation_id);
+        CREATE INDEX IF NOT EXISTS idx_token_swaps_suspicion ON token_swaps(suspicion_score);
+        
         CREATE INDEX IF NOT EXISTS idx_token_patterns_pattern ON token_name_patterns(pattern);
+        
         CREATE INDEX IF NOT EXISTS idx_position_aggregations_wallet ON position_aggregations(wallet_address);
         CREATE INDEX IF NOT EXISTS idx_position_aggregations_token ON position_aggregations(token_address);
         CREATE INDEX IF NOT EXISTS idx_position_aggregations_score ON position_aggregations(suspicion_score);
-        -- 🆕 НОВЫЕ ИНДЕКСЫ ДЛЯ ПРОИЗВОДИТЕЛЬНОСТИ
-        CREATE INDEX IF NOT EXISTS idx_transactions_aggregated ON transactions(is_aggregated);
-        CREATE INDEX IF NOT EXISTS idx_transactions_aggregation_id ON transactions(aggregation_id);
-        CREATE INDEX IF NOT EXISTS idx_transactions_suspicion ON transactions(suspicion_score);
         CREATE INDEX IF NOT EXISTS idx_position_aggregations_processed ON position_aggregations(is_processed);
         CREATE INDEX IF NOT EXISTS idx_position_aggregations_alert ON position_aggregations(alert_sent);
         CREATE INDEX IF NOT EXISTS idx_position_aggregations_risk ON position_aggregations(risk_level);
+        
         CREATE INDEX IF NOT EXISTS idx_insider_alerts_processed ON insider_alerts(processed);
         CREATE INDEX IF NOT EXISTS idx_insider_alerts_wallet ON insider_alerts(wallet_address);
+        
         CREATE INDEX IF NOT EXISTS idx_provider_stats_name ON provider_stats(provider_name);
       `);
 
@@ -171,14 +172,14 @@ export class Database {
 
   async isTransactionProcessed(transactionId: string): Promise<boolean> {
     const row = this.db.prepare(
-      'SELECT 1 FROM transactions WHERE transaction_id = ?'
+      'SELECT 1 FROM token_swaps WHERE transaction_id = ?'
     ).get(transactionId);
     return !!row;
   }
 
   async saveTransaction(swap: TokenSwap): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO transactions (
+      INSERT OR REPLACE INTO token_swaps (
         transaction_id, wallet_address, token_address, token_symbol, token_name,
         amount, amount_usd, timestamp, dex, is_new_wallet, is_reactivated_wallet,
         wallet_age, days_since_last_activity, price, pnl, multiplier, winrate, time_to_target, swap_type,
@@ -206,7 +207,6 @@ export class Database {
       swap.winrate || null,
       swap.timeToTarget || null,
       swap.swapType || null,
-      // 🆕 НОВЫЕ ПОЛЯ
       0, // is_aggregated (по умолчанию false)
       null, // aggregation_id
       0, // suspicion_score
@@ -214,7 +214,6 @@ export class Database {
     );
   }
 
-  // 🆕 НОВЫЙ МЕТОД: СОХРАНЕНИЕ ТРАНЗАКЦИИ С АГРЕГАЦИЕЙ
   async saveTransactionWithAggregation(swap: TokenSwap, aggregationData?: {
     isAggregated: boolean;
     aggregationId?: number;
@@ -222,7 +221,7 @@ export class Database {
     aggregationGroup?: string;
   }): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO transactions (
+      INSERT OR REPLACE INTO token_swaps (
         transaction_id, wallet_address, token_address, token_symbol, token_name,
         amount, amount_usd, timestamp, dex, is_new_wallet, is_reactivated_wallet,
         wallet_age, days_since_last_activity, price, pnl, multiplier, winrate, time_to_target, swap_type,
@@ -250,7 +249,6 @@ export class Database {
       swap.winrate || null,
       swap.timeToTarget || null,
       swap.swapType || null,
-      // 🆕 АГРЕГАЦИОННЫЕ ПОЛЯ
       aggregationData?.isAggregated ? 1 : 0,
       aggregationData?.aggregationId || null,
       aggregationData?.suspicionScore || 0,
@@ -323,7 +321,7 @@ export class Database {
 
   async getWalletTransactions(address: string, limit: number = 100): Promise<TokenSwap[]> {
     const rows = this.db.prepare(`
-      SELECT * FROM transactions 
+      SELECT * FROM token_swaps 
       WHERE wallet_address = ? 
       ORDER BY timestamp DESC 
       LIMIT ?
@@ -336,7 +334,7 @@ export class Database {
     const cutoffTime = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 
     const rows = this.db.prepare(`
-      SELECT * FROM transactions 
+      SELECT * FROM token_swaps 
       WHERE timestamp > ? 
       ORDER BY timestamp DESC
     `).all(cutoffTime) as any[];
@@ -346,7 +344,7 @@ export class Database {
 
   async getWalletTransactionsAfter(address: string, afterDate: Date): Promise<TokenSwap[]> {
     const rows = this.db.prepare(`
-      SELECT * FROM transactions 
+      SELECT * FROM token_swaps 
       WHERE wallet_address = ? AND timestamp > ?
       ORDER BY timestamp DESC
     `).all(address, afterDate.toISOString()) as any[];
@@ -354,10 +352,9 @@ export class Database {
     return rows.map(row => this.mapRowToTokenSwap(row));
   }
 
-  // 🎯 НОВЫЙ МЕТОД: получение транзакций по токену (для агрегации)
   async getTransactionsByTokenAddress(tokenAddress: string, limit: number = 100): Promise<TokenSwap[]> {
     const rows = this.db.prepare(`
-      SELECT * FROM transactions 
+      SELECT * FROM token_swaps 
       WHERE token_address = ? 
       ORDER BY timestamp DESC 
       LIMIT ?
@@ -366,9 +363,6 @@ export class Database {
     return rows.map(row => this.mapRowToTokenSwap(row));
   }
 
-  // 🎯 НОВЫЕ МЕТОДЫ ДЛЯ АГРЕГАЦИИ ПОЗИЦИЙ
-
-  // Сохранение агрегированной позиции
   async savePositionAggregation(aggregation: {
     walletAddress: string;
     tokenAddress: string;
@@ -387,7 +381,6 @@ export class Database {
       amountUSD: number;
       timestamp: Date;
     }>;
-    // 🆕 ДОПОЛНИТЕЛЬНЫЕ ПОЛЯ
     maxPurchaseSize?: number;
     minPurchaseSize?: number;
     sizeStdDeviation?: number;
@@ -432,7 +425,6 @@ export class Database {
 
     const aggregationId = result.lastInsertRowid as number;
 
-    // 🆕 ОБНОВЛЯЕМ СВЯЗАННЫЕ ТРАНЗАКЦИИ
     await this.updateTransactionsWithAggregation(
       aggregation.purchases.map(p => p.transactionId),
       aggregationId,
@@ -443,10 +435,9 @@ export class Database {
     return aggregationId;
   }
 
-  // 🆕 ОБНОВЛЕНИЕ ТРАНЗАКЦИЙ С АГРЕГАЦИОННЫМИ ДАННЫМИ
   private async updateTransactionsWithAggregation(transactionIds: string[], aggregationId: number, suspicionScore: number): Promise<void> {
     const stmt = this.db.prepare(`
-      UPDATE transactions 
+      UPDATE token_swaps 
       SET is_aggregated = 1, aggregation_id = ?, suspicion_score = ?
       WHERE transaction_id = ?
     `);
@@ -456,7 +447,6 @@ export class Database {
     }
   }
 
-  // Получение агрегированных позиций по score
   async getPositionAggregationsByScore(minScore: number = 75, limit: number = 50): Promise<Array<{
     id: number;
     walletAddress: string;
@@ -477,7 +467,6 @@ export class Database {
       amountUSD: number;
       timestamp: Date;
     }>;
-    // 🆕 ДОПОЛНИТЕЛЬНЫЕ ПОЛЯ
     maxPurchaseSize: number;
     minPurchaseSize: number;
     sizeStdDeviation: number;
@@ -523,7 +512,6 @@ export class Database {
     }));
   }
 
-  // Получение агрегированных позиций по кошельку
   async getPositionAggregationsByWallet(walletAddress: string): Promise<Array<{
     id: number;
     tokenAddress: string;
@@ -551,7 +539,6 @@ export class Database {
     }));
   }
 
-  // 🆕 ПОЛУЧЕНИЕ НЕОБРАБОТАННЫХ АГРЕГАЦИЙ
   async getUnprocessedPositionAggregations(limit: number = 50): Promise<Array<{
     id: number;
     walletAddress: string;
@@ -581,7 +568,6 @@ export class Database {
     }));
   }
 
-  // 🆕 ПОМЕТКА АГРЕГАЦИИ КАК ОБРАБОТАННОЙ
   async markPositionAggregationAsProcessed(aggregationId: number, alertSent: boolean = false): Promise<void> {
     this.db.prepare(`
       UPDATE position_aggregations 
@@ -590,10 +576,9 @@ export class Database {
     `).run(alertSent ? 1 : 0, aggregationId);
   }
 
-  // Статистика агрегированных позиций
   async getPositionAggregationStats(): Promise<{
     totalPositions: number;
-    highSuspicionPositions: number; // score >= 75
+    highSuspicionPositions: number;
     totalValueUSD: number;
     avgSuspicionScore: number;
     topWalletsByPositions: Array<{
@@ -601,7 +586,6 @@ export class Database {
       positionCount: number;
       totalValueUSD: number;
     }>;
-    // 🆕 ДОПОЛНИТЕЛЬНАЯ СТАТИСТИКА
     unprocessedPositions: number;
     alertsSent: number;
     riskDistribution: {
@@ -628,7 +612,6 @@ export class Database {
       LIMIT 10
     `).all() as any[];
 
-    // 🆕 ДОПОЛНИТЕЛЬНАЯ СТАТИСТИКА
     const unprocessed = this.db.prepare(
       'SELECT COUNT(*) as count FROM position_aggregations WHERE is_processed = 0'
     ).get() as any;
@@ -668,8 +651,6 @@ export class Database {
       }
     };
   }
-
-  // 🆕 НОВЫЕ МЕТОДЫ ДЛЯ INSIDER ALERTS
 
   async saveInsiderAlert(alert: {
     walletAddress: string;
@@ -731,8 +712,6 @@ export class Database {
     `).run(reported ? 1 : 0, alertId);
   }
 
-  // 🆕 НОВЫЕ МЕТОДЫ ДЛЯ PROVIDER СТАТИСТИКИ
-
   async updateProviderStats(providerName: string, stats: {
     requestCount: number;
     errorCount: number;
@@ -785,17 +764,14 @@ export class Database {
     }));
   }
 
-  // Методы для Token Name Alerts
   async checkTokenNamePattern(tokenName: string, tokenAddress: string, holders: number): Promise<{
     shouldAlert: boolean;
     tokenAddress?: string;
     holders?: number;
     similarCount?: number;
   }> {
-    // Нормализуем имя токена (убираем числа, специальные символы)
     const normalizedName = this.normalizeTokenName(tokenName);
     
-    // Проверяем, есть ли уже такой паттерн
     const existingPattern = this.db.prepare(`
       SELECT * FROM token_name_patterns 
       WHERE pattern = ? 
@@ -803,7 +779,6 @@ export class Database {
     `).get(normalizedName) as any;
 
     if (existingPattern) {
-      // Обновляем счетчик и проверяем максимальное количество держателей
       if (holders > existingPattern.max_holders_count) {
         this.db.prepare(`
           UPDATE token_name_patterns 
@@ -820,7 +795,6 @@ export class Database {
         `).run(existingPattern.id);
       }
 
-      // Возвращаем true если это уже 5+ токенов и у лучшего 70+ держателей
       const shouldAlert = existingPattern.token_count + 1 >= 5 && 
                          Math.max(holders, existingPattern.max_holders_count) >= 70;
       
@@ -835,7 +809,6 @@ export class Database {
       
       return { shouldAlert: false };
     } else {
-      // Создаем новый паттерн
       this.db.prepare(`
         INSERT INTO token_name_patterns 
         (pattern, first_seen, token_count, max_holders_token, max_holders_count)
@@ -868,7 +841,6 @@ export class Database {
     };
   }
 
-  // Статистические методы
   async getDatabaseStats(): Promise<{
     totalTransactions: number;
     totalWallets: number;
@@ -876,7 +848,6 @@ export class Database {
     avgTransactionSize: number;
     positionAggregations: number;
     highSuspicionPositions: number;
-    // 🆕 ДОПОЛНИТЕЛЬНАЯ СТАТИСТИКА
     aggregatedTransactions: number;
     insiderAlerts: number;
     unprocessedAlerts: number;
@@ -887,24 +858,23 @@ export class Database {
       successRate: number;
     }>;
   }> {
-    const totalTransactions = this.db.prepare('SELECT COUNT(*) as count FROM transactions').get() as any;
+    const totalTransactions = this.db.prepare('SELECT COUNT(*) as count FROM token_swaps').get() as any;
     const totalWallets = this.db.prepare('SELECT COUNT(*) as count FROM wallets').get() as any;
     
     const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const last24hTransactions = this.db.prepare(
-      'SELECT COUNT(*) as count FROM transactions WHERE timestamp > ?'
+      'SELECT COUNT(*) as count FROM token_swaps WHERE timestamp > ?'
     ).get(last24h) as any;
     
-    const avgSize = this.db.prepare('SELECT AVG(amount_usd) as avg FROM transactions').get() as any;
+    const avgSize = this.db.prepare('SELECT AVG(amount_usd) as avg FROM token_swaps').get() as any;
     
     const positionAggregations = this.db.prepare('SELECT COUNT(*) as count FROM position_aggregations').get() as any;
     const highSuspicionPositions = this.db.prepare(
       'SELECT COUNT(*) as count FROM position_aggregations WHERE suspicion_score >= 75'
     ).get() as any;
 
-    // 🆕 ДОПОЛНИТЕЛЬНАЯ СТАТИСТИКА
     const aggregatedTransactions = this.db.prepare(
-      'SELECT COUNT(*) as count FROM transactions WHERE is_aggregated = 1'
+      'SELECT COUNT(*) as count FROM token_swaps WHERE is_aggregated = 1'
     ).get() as any;
 
     const insiderAlerts = this.db.prepare('SELECT COUNT(*) as count FROM insider_alerts').get() as any;
@@ -944,7 +914,6 @@ export class Database {
     this.logger.info('Database connection closed');
   }
 
-  // Вспомогательные методы
   private mapRowToTokenSwap(row: any): TokenSwap {
     return {
       transactionId: row.transaction_id,
@@ -970,7 +939,6 @@ export class Database {
   }
 
   private normalizeTokenName(name: string): string {
-    // Удаляем числа, специальные символы, приводим к нижнему регистру
     return name
       .toLowerCase()
       .replace(/[0-9]/g, '')
@@ -978,7 +946,6 @@ export class Database {
       .trim();
   }
 
-  // Методы для совместимости с другими сервисами
   async getWalletsWithHighSuspicionScore(threshold: number = 70): Promise<WalletInfo[]> {
     const rows = this.db.prepare(`
       SELECT * FROM wallets 
@@ -1010,11 +977,9 @@ export class Database {
     }));
   }
 
-  // 🆕 НОВЫЕ УТИЛИТАРНЫЕ МЕТОДЫ
-
   async getAggregatedTransactionsByGroup(aggregationGroup: string): Promise<TokenSwap[]> {
     const rows = this.db.prepare(`
-      SELECT * FROM transactions 
+      SELECT * FROM token_swaps 
       WHERE aggregation_group = ? 
       ORDER BY timestamp ASC
     `).all(aggregationGroup) as any[];
@@ -1024,7 +989,7 @@ export class Database {
 
   async getTransactionsByAggregationId(aggregationId: number): Promise<TokenSwap[]> {
     const rows = this.db.prepare(`
-      SELECT * FROM transactions 
+      SELECT * FROM token_swaps 
       WHERE aggregation_id = ? 
       ORDER BY timestamp ASC
     `).all(aggregationId) as any[];
@@ -1034,7 +999,7 @@ export class Database {
 
   async getHighSuspicionTransactions(minScore: number = 75): Promise<TokenSwap[]> {
     const rows = this.db.prepare(`
-      SELECT * FROM transactions 
+      SELECT * FROM token_swaps 
       WHERE suspicion_score >= ? 
       ORDER BY suspicion_score DESC, timestamp DESC
       LIMIT 100
