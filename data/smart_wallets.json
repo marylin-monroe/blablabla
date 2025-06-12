@@ -1,11 +1,11 @@
-{
+﻿{
   "version": "2.0",
   "lastUpdated": "2025-06-11",
   "description": "Smart Money wallets (hardcoded fallback)",
   "totalWallets": 3,
   "wallets": [
     {
-      "address": "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+      "address": "nmAFxHYciYM9qpEp5ZqLoc4bKpbBsZahU4AePshR5VC",
       "category": "sniper",
       "nickname": "SOL Sniper Pro",
       "description": "Expert sniper for new tokens on Solana",
