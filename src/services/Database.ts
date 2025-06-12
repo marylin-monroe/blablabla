@@ -24,7 +24,7 @@ export class Database {
   async init(): Promise<void> {
     try {
       this.db.exec(`
-        CREATE TABLE IF NOT EXISTS transactions (
+        CREATE TABLE IF NOT EXISTS token_swaps (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           transaction_id TEXT UNIQUE NOT NULL,
           wallet_address TEXT NOT NULL,

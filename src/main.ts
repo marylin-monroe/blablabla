@@ -1,4 +1,4 @@
-// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ + 48h DISCOVERY - С АВТОМАТИЧЕСКОЙ МИГРАЦИЕЙ БД
+// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ + 48h DISCOVERY
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -10,9 +10,6 @@ import { WebhookServer } from './services/WebhookServer';
 import { QuickNodeWebhookManager } from './services/QuickNodeWebhookManager';
 import { Logger } from './utils/Logger';
 import { SmartWalletLoader } from './services/SmartWalletLoader';
-import * as path from 'path';
-import * as fs from 'fs';
-import BetterSQLite3 from 'better-sqlite3';
 
 dotenv.config();
 
@@ -66,120 +63,6 @@ class SmartMoneyBotRunner {
     this.webhookManager = new QuickNodeWebhookManager();
 
     this.logger.info('✅ Smart Money Bot services initialized (OPTIMIZED + POSITION AGGREGATION + 48h DISCOVERY)');
-  }
-
-  // 🔧 НОВЫЙ МЕТОД: АВТОМАТИЧЕСКАЯ МИГРАЦИЯ БАЗЫ ДАННЫХ
-  private async performDatabaseMigration(): Promise<void> {
-    try {
-      this.logger.info('🔧 Checking database schema and performing migrations...');
-
-      // Определяем путь к основной базе данных
-      const dataDir = path.join(process.cwd(), 'data');
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-        this.logger.info('📁 Created data directory');
-      }
-
-      const mainDbPath = path.join(dataDir, 'token_tracker.db');
-      
-      // Проверяем существование файла БД
-      const dbExists = fs.existsSync(mainDbPath);
-      if (!dbExists) {
-        this.logger.info('📊 Database file does not exist, will be created with latest schema');
-        return; // Новая БД будет создана с правильной схемой
-      }
-
-      this.logger.info('🔍 Existing database found, checking schema...');
-
-      // Открываем БД для миграции
-      const migrationDb = new BetterSQLite3(mainDbPath);
-      
-      try {
-        // Проверяем существование колонки is_aggregated
-        const tableInfo = migrationDb.prepare("PRAGMA table_info(token_swaps)").all();
-        const hasAggregatedColumn = tableInfo.some((col: any) => col.name === 'is_aggregated');
-        
-        if (!hasAggregatedColumn) {
-          this.logger.info('🔧 Adding missing column: is_aggregated');
-          migrationDb.exec('ALTER TABLE token_swaps ADD COLUMN is_aggregated INTEGER DEFAULT 0');
-        }
-
-        // Проверяем другие возможные недостающие колонки
-        const hasProcessedColumn = tableInfo.some((col: any) => col.name === 'processed_for_aggregation');
-        if (!hasProcessedColumn) {
-          this.logger.info('🔧 Adding missing column: processed_for_aggregation');
-          migrationDb.exec('ALTER TABLE token_swaps ADD COLUMN processed_for_aggregation INTEGER DEFAULT 0');
-        }
-
-        const hasAggregationIdColumn = tableInfo.some((col: any) => col.name === 'aggregation_id');
-        if (!hasAggregationIdColumn) {
-          this.logger.info('🔧 Adding missing column: aggregation_id');
-          migrationDb.exec('ALTER TABLE token_swaps ADD COLUMN aggregation_id TEXT');
-        }
-
-        const hasSuspicionScoreColumn = tableInfo.some((col: any) => col.name === 'suspicion_score');
-        if (!hasSuspicionScoreColumn) {
-          this.logger.info('🔧 Adding missing column: suspicion_score');
-          migrationDb.exec('ALTER TABLE token_swaps ADD COLUMN suspicion_score INTEGER DEFAULT 0');
-        }
-
-        // Проверяем и создаем недостающие индексы
-        try {
-          const indexExists = migrationDb.prepare(`
-            SELECT name FROM sqlite_master 
-            WHERE type='index' AND name='idx_token_swaps_aggregated'
-          `).get();
-
-          if (!indexExists) {
-            this.logger.info('🔧 Creating missing index: idx_token_swaps_aggregated');
-            migrationDb.exec('CREATE INDEX idx_token_swaps_aggregated ON token_swaps(is_aggregated)');
-          }
-        } catch (indexError) {
-          this.logger.debug('Index creation info:', indexError);
-        }
-
-        // Проверяем таблицу position_aggregations
-        try {
-          migrationDb.prepare("SELECT COUNT(*) FROM position_aggregations").get();
-        } catch (tableError) {
-          this.logger.info('🔧 Creating missing table: position_aggregations');
-          migrationDb.exec(`
-            CREATE TABLE position_aggregations (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              aggregation_id TEXT UNIQUE,
-              token_address TEXT,
-              wallet_addresses TEXT,
-              total_amount_usd REAL,
-              purchase_count INTEGER,
-              avg_amount_usd REAL,
-              time_window_start DATETIME,
-              time_window_end DATETIME,
-              suspicion_score INTEGER,
-              detection_timestamp DATETIME,
-              is_processed INTEGER DEFAULT 0,
-              alert_sent INTEGER DEFAULT 0,
-              notes TEXT
-            )
-          `);
-
-          migrationDb.exec('CREATE INDEX idx_position_aggregations_token ON position_aggregations(token_address)');
-          migrationDb.exec('CREATE INDEX idx_position_aggregations_suspicion ON position_aggregations(suspicion_score)');
-          migrationDb.exec('CREATE INDEX idx_position_aggregations_processed ON position_aggregations(is_processed)');
-        }
-
-        this.logger.info('✅ Database schema migration completed successfully');
-
-      } catch (migrationError) {
-        this.logger.error('❌ Migration error:', migrationError);
-        throw migrationError;
-      } finally {
-        migrationDb.close();
-      }
-
-    } catch (error) {
-      this.logger.error('❌ Critical database migration error:', error);
-      throw error;
-    }
   }
 
   private validateEnvironment(): void {
@@ -260,10 +143,6 @@ class SmartMoneyBotRunner {
   async start(): Promise<void> {
     try {
       this.logger.info('🚀 Starting OPTIMIZED Smart Money Bot System + POSITION AGGREGATION + 48h DISCOVERY...');
-
-      // 🔧 КРИТИЧЕСКИ ВАЖНО: ВЫПОЛНЯЕМ МИГРАЦИЮ ПЕРЕД ИНИЦИАЛИЗАЦИЕЙ БД
-      await this.performDatabaseMigration();
-      this.logger.info('✅ Database migration completed');
 
       await this.database.init();
       await this.smDatabase.init();
