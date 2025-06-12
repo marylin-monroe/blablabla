@@ -1,4 +1,4 @@
-// src/services/SmartWalletDiscovery.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ
+// src/services/SmartWalletDiscovery.ts - ОПТИМИЗИРОВАННЫЙ С СМЯГЧЕННЫМИ КРИТЕРИЯМИ
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { Database } from './Database';
 import { Logger } from '../utils/Logger';
@@ -18,12 +18,12 @@ export class SmartWalletDiscovery {
   }
 
   async discoverSmartWallets(): Promise<WalletAnalysisResult[]> {
-    this.logger.info('🔍 Starting OPTIMIZED Smart Wallet Discovery...');
+    this.logger.info('🔍 Starting OPTIMIZED Smart Wallet Discovery with RELAXED criteria...');
 
     try {
-      // 🔥 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Получаем только ТОП кандидатов (было 300)
+      // 🔥 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Получаем только ТОП кандидатов (остается 20)
       const candidateWallets = await this.findTopCandidateWalletsOptimized();
-      this.logger.info(`Found ${candidateWallets.length} TOP candidate wallets (OPTIMIZED)`);
+      this.logger.info(`Found ${candidateWallets.length} TOP candidate wallets (RELAXED CRITERIA)`);
 
       const results: WalletAnalysisResult[] = [];
 
@@ -51,7 +51,7 @@ export class SmartWalletDiscovery {
     }
   }
 
-  // 🔥 СУПЕР ОПТИМИЗИРОВАННЫЙ ПОИСК КАНДИДАТОВ: 300 → 20!
+  // 🔥 СУПЕР ОПТИМИЗИРОВАННЫЙ ПОИСК КАНДИДАТОВ: СМЯГЧЕННЫЕ КРИТЕРИИ
   private async findTopCandidateWalletsOptimized(): Promise<string[]> {
     try {
       // 🔥 СОКРАЩЕННЫЙ ПЕРИОД: 2 недели → 1 неделя для свежести
@@ -92,22 +92,22 @@ export class SmartWalletDiscovery {
         }
       }
 
-      // Вычисляем средний размер сделки и применяем СТРОГИЕ фильтры
+      // Вычисляем средний размер сделки и применяем СМЯГЧЕННЫЕ фильтры
       const candidates: string[] = [];
       
       for (const [wallet, metrics] of walletMetrics) {
         metrics.avgTradeSize = metrics.totalVolume / metrics.tradeCount;
         
-        // 🔥 СУПЕР СТРОГИЕ КРИТЕРИИ для ТОП кандидатов
+        // 🔥 СМЯГЧЕННЫЕ КРИТЕРИИ для поиска большего количества талантов
         const daysSinceActive = (Date.now() - metrics.lastActivity.getTime()) / (1000 * 60 * 60 * 24);
         
         if (
-          metrics.totalVolume >= 100000 && // 🔥 ПОВЫШЕНО: $100K объема (было $50K)
-          metrics.tradeCount >= 20 && // 🔥 ПОВЫШЕНО: минимум 20 сделок (было 10)
-          metrics.avgTradeSize >= 5000 && // 🔥 ПОВЫШЕНО: $5K средняя сделка (было $2K)
-          metrics.maxTradeSize >= 25000 && // 🔥 НОВОЕ: минимум одна крупная сделка $25K+
-          metrics.uniqueTokens.size >= 5 && // 🔥 ПОВЫШЕНО: минимум 5 разных токенов (было 3)
-          daysSinceActive <= 3 // 🔥 НОВОЕ: активность в последние 3 дня
+          metrics.totalVolume >= 30000 && // 🔥 СНИЖЕНО: $30K объема (было $100K)
+          metrics.tradeCount >= 20 && // Остается 20
+          metrics.avgTradeSize >= 1500 && // 🔥 СНИЖЕНО: $1.5K средняя сделка (было $5K)
+          metrics.maxTradeSize >= 5000 && // 🔥 СНИЖЕНО: минимум одна крупная сделка $5K+ (было $25K)
+          metrics.uniqueTokens.size >= 5 && // Остается 5 разных токенов
+          daysSinceActive <= 7 // 🔥 УВЕЛИЧЕНО: активность в последние 7 дней (было 3)
         ) {
           candidates.push(wallet);
         }
@@ -132,16 +132,16 @@ export class SmartWalletDiscovery {
         return bScore - aScore;
       });
 
-      // 🔥 КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ: берем только ТОП-20 кандидатов (было 300)!
+      // 🔥 ОСТАЕТСЯ 20 кандидатов как просил пользователь
       const topCandidates = candidates.slice(0, 20);
       
-      this.logger.info(`🎯 Selected TOP ${topCandidates.length}/20 candidates with STRICT criteria:`);
-      this.logger.info(`• Min volume: $100K+`);
+      this.logger.info(`🎯 Selected TOP ${topCandidates.length}/20 candidates with RELAXED criteria:`);
+      this.logger.info(`• Min volume: $30K+ (было $100K)`);
       this.logger.info(`• Min trades: 20+`);
-      this.logger.info(`• Min avg trade: $5K+`);
-      this.logger.info(`• Min max trade: $25K+`);
+      this.logger.info(`• Min avg trade: $1.5K+ (было $5K)`);
+      this.logger.info(`• Min max trade: $5K+ (было $25K)`);
       this.logger.info(`• Min tokens: 5+`);
-      this.logger.info(`• Max inactivity: 3 days`);
+      this.logger.info(`• Max inactivity: 7 days (было 3)`);
 
       return topCandidates;
 
@@ -162,13 +162,13 @@ export class SmartWalletDiscovery {
 
       // 🔥 ОГРАНИЧЕННАЯ ИСТОРИЯ: максимум 200 транзакций (было 500)
       const transactions = await this.database.getWalletTransactions(walletAddress, 200);
-      if (transactions.length < 50) { // Повышено: 50 транзакций (было 30)
+      if (transactions.length < 30) { // СНИЖЕНО: 30 транзакций (было 50)
         return {
           address: walletAddress,
           isSmartMoney: false,
           metrics: this.getDefaultMetrics(),
           familyConnections: [], // Всегда пустой массив
-          disqualificationReasons: ['Insufficient transaction history (need 50+ txs)']
+          disqualificationReasons: ['Insufficient transaction history (need 30+ txs)']
         };
       }
 
@@ -178,8 +178,8 @@ export class SmartWalletDiscovery {
       // Определяем категорию
       const category = this.determineCategoryOptimized(transactions, metrics);
       
-      // 🔥 СТРОГИЕ критерии Smart Money
-      const { isSmartMoney, disqualificationReasons } = this.evaluateSmartMoneyCriteriaStrict(metrics);
+      // 🔥 СМЯГЧЕННЫЕ критерии Smart Money
+      const { isSmartMoney, disqualificationReasons } = this.evaluateSmartMoneyRelaxed(metrics);
 
       return {
         address: walletAddress,
@@ -342,35 +342,35 @@ export class SmartWalletDiscovery {
     return undefined;
   }
 
-  // 🔥 СТРОГИЕ критерии Smart Money для высокого качества
-  private evaluateSmartMoneyCriteriaStrict(metrics: WalletPerformanceMetrics): {
+  // 🔥 СМЯГЧЕННЫЕ критерии Smart Money для большего охвата талантов
+  private evaluateSmartMoneyRelaxed(metrics: WalletPerformanceMetrics): {
     isSmartMoney: boolean;
     disqualificationReasons: string[];
   } {
     const reasons: string[] = [];
     
-    // 🔥 ПОВЫШЕННЫЕ требования для качества
-    if (metrics.winRate < 75) { // Повышено с 65% до 75%
-      reasons.push(`Win rate too low: ${metrics.winRate.toFixed(1)}% (required: 75%+)`);
+    // 🔥 СМЯГЧЕННЫЕ требования для поиска большего числа талантов
+    if (metrics.winRate < 60) { // СНИЖЕНО с 75% до 60%
+      reasons.push(`Win rate too low: ${metrics.winRate.toFixed(1)}% (required: 60%+)`);
     }
     
-    if (metrics.totalPnL < 100000) { // Повышено с $50K до $100K
-      reasons.push(`PnL too low: $${metrics.totalPnL.toFixed(0)} (required: $100K+)`);
+    if (metrics.totalPnL < 20000) { // СНИЖЕНО с $100K до $20K
+      reasons.push(`PnL too low: $${metrics.totalPnL.toFixed(0)} (required: $20K+)`);
     }
     
-    if (metrics.avgTradeSize < 5000) { // Повышено с $2K до $5K
-      reasons.push(`Average trade size too low: $${metrics.avgTradeSize.toFixed(0)} (required: $5K+)`);
+    if (metrics.avgTradeSize < 1500) { // СНИЖЕНО с $5K до $1.5K
+      reasons.push(`Average trade size too low: $${metrics.avgTradeSize.toFixed(0)} (required: $1.5K+)`);
     }
     
-    if (metrics.totalTrades < 50) { // Повышено с 30 до 50
-      reasons.push(`Insufficient trades: ${metrics.totalTrades} (required: 50+)`);
+    if (metrics.totalTrades < 30) { // СНИЖЕНО с 50 до 30
+      reasons.push(`Insufficient trades: ${metrics.totalTrades} (required: 30+)`);
     }
 
-    if (metrics.maxTradeSize < 20000) { // Новое требование: хотя бы одна крупная сделка
-      reasons.push(`No large trades: max $${metrics.maxTradeSize.toFixed(0)} (required: $20K+)`);
+    if (metrics.maxTradeSize < 5000) { // СНИЖЕНО: хотя бы одна сделка $5K+ (было $20K)
+      reasons.push(`No large trades: max $${metrics.maxTradeSize.toFixed(0)} (required: $5K+)`);
     }
 
-    // 🔥 СТРОЖЕ по активности: только 7 дней (было 30)
+    // 🔥 СМЯГЧЕНО по активности: 7 дней (было 7)
     const daysSinceLastActivity = (Date.now() - metrics.recentActivity.getTime()) / (1000 * 60 * 60 * 24);
     if (daysSinceLastActivity > 7) {
       reasons.push(`Inactive for ${Math.floor(daysSinceLastActivity)} days (required: <7 days)`);

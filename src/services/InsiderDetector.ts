@@ -1,4 +1,4 @@
-// src/services/InsiderDetector.ts - СИСТЕМА ПОИСКА ИНСАЙДЕРОВ
+// src/services/InsiderDetector.ts - СИСТЕМА ПОИСКА ИНСАЙДЕРОВ (ИСПРАВЛЕННАЯ)
 import { Database } from './Database';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { TelegramNotifier } from './TelegramNotifier';
@@ -277,7 +277,7 @@ export class InsiderDetector {
     }
   }
 
-  // 📊 Вычисление insider метрик
+  // 📊 Вычисление insider метрик (ИСПРАВЛЕНО!)
   private async calculateInsiderMetrics(candidate: InsiderCandidate): Promise<{
     insiderScore: number;
     earlyEntryRate: number;
@@ -287,6 +287,16 @@ export class InsiderDetector {
     try {
       let totalScore = 0;
       let totalProfit = 0;
+
+      // Проверяем, есть ли успешные moonshots
+      if (candidate.successfulMoonshots.length === 0) {
+        return {
+          insiderScore: 0,
+          earlyEntryRate: 0,
+          avgHoldTime: 0,
+          totalProfit: 0
+        };
+      }
 
       // Анализируем успешные moonshots
       const avgEntryAge = candidate.successfulMoonshots.reduce((sum, ms) => sum + ms.ageAtEntry, 0) / candidate.successfulMoonshots.length;
@@ -310,7 +320,7 @@ export class InsiderDetector {
       return {
         insiderScore: Math.min(totalScore, 100),
         earlyEntryRate,
-        avgHoldTime: 0, // TODO: implement
+        avgHoldTime: 0, // TODO: implement если нужно
         totalProfit
       };
 
@@ -318,26 +328,24 @@ export class InsiderDetector {
       this.logger.error('Error calculating insider metrics:', error);
       return { insiderScore: 0, earlyEntryRate: 0, avgHoldTime: 0, totalProfit: 0 };
     }
-    const avgEntryAge = candidate.successfulMoonshots.reduce((sum, ms) => sum + ms.ageAtEntry, 0) / candidate.successfulMoonshots.length;
-    const avgMultiplier = candidate.successfulMoonshots.reduce((sum, ms) => sum + ms.multiplier, 0) / candidate.successfulMoonshots.length;
   }
 
   // 💰 Получение текущей цены токена
   private async getCurrentTokenPrice(tokenAddress: string): Promise<number> {
-  try {
-    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-    if (response.ok) {
-      const data = await response.json() as any;
-      if (data.pairs && data.pairs.length > 0) {
-        const price = parseFloat(data.pairs[0].priceUsd || '0');
-        return Math.max(price, 0.000001); // ✅ Минимальная цена для избежания деления на 0
+    try {
+      const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+      if (response.ok) {
+        const data = await response.json() as any;
+        if (data.pairs && data.pairs.length > 0) {
+          const price = parseFloat(data.pairs[0].priceUsd || '0');
+          return Math.max(price, 0.000001); // ✅ Минимальная цена для избежания деления на 0
+        }
       }
+      return 0.000001; // ✅ Минимальная цена по умолчанию
+    } catch (error) {
+      return 0.000001;
     }
-    return 0.000001; // ✅ Минимальная цена по умолчанию
-  } catch (error) {
-    return 0.000001;
   }
-}
 
   // 📈 Получение рыночной капитализации
   private async getTokenMarketCap(tokenAddress: string, price: number): Promise<number> {
@@ -358,7 +366,8 @@ export class InsiderDetector {
       message += `Found <code>${insiders.length}</code> potential insiders:\n\n`;
 
       for (const insider of insiders.slice(0, 10)) { // Топ-10
-        const avgMultiplier = insider.successfulMoonshots.reduce((sum, ms) => sum + ms.multiplier, 0) / insider.successfulMoonshots.length;
+        const avgMultiplier = insider.successfulMoonshots.length > 0 ? 
+          insider.successfulMoonshots.reduce((sum, ms) => sum + ms.multiplier, 0) / insider.successfulMoonshots.length : 0;
         
         message += `🎯 <code>${insider.address.slice(0, 8)}...${insider.address.slice(-4)}</code>\n`;
         message += `📊 Score: <code>${insider.insiderScore}/100</code>\n`;
@@ -393,7 +402,8 @@ export class InsiderDetector {
         if (existing) continue;
 
         // Создаем Smart Money кошелек
-        const avgMultiplier = insider.successfulMoonshots.reduce((sum, ms) => sum + ms.multiplier, 0) / insider.successfulMoonshots.length;
+        const avgMultiplier = insider.successfulMoonshots.length > 0 ? 
+          insider.successfulMoonshots.reduce((sum, ms) => sum + ms.multiplier, 0) / insider.successfulMoonshots.length : 0;
         
         const smartWallet = {
           address: insider.address,

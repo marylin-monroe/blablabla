@@ -1,4 +1,4 @@
-// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ
+// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ + 48h DISCOVERY
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -61,7 +61,7 @@ class SmartMoneyBotRunner {
     
     this.webhookManager = new QuickNodeWebhookManager();
 
-    this.logger.info('✅ Smart Money Bot services initialized (OPTIMIZED + POSITION AGGREGATION)');
+    this.logger.info('✅ Smart Money Bot services initialized (OPTIMIZED + POSITION AGGREGATION + 48h DISCOVERY)');
   }
 
   private validateEnvironment(): void {
@@ -138,7 +138,7 @@ class SmartMoneyBotRunner {
 
   async start(): Promise<void> {
     try {
-      this.logger.info('🚀 Starting OPTIMIZED Smart Money Bot System + POSITION AGGREGATION...');
+      this.logger.info('🚀 Starting OPTIMIZED Smart Money Bot System + POSITION AGGREGATION + 48h DISCOVERY...');
 
       await this.database.init();
       await this.smDatabase.init();
@@ -163,17 +163,18 @@ class SmartMoneyBotRunner {
 
       this.startPeriodicAnalysisOptimized();
 
-      this.startWalletDiscoveryOptimized();
+      this.startWalletDiscoveryEvery48Hours(); // 🔥 ИЗМЕНЕНО!
 
       // 🎯 НОВЫЙ: Периодическая отправка статистики агрегации
       this.startPositionAggregationReports();
 
-      this.logger.info('✅ OPTIMIZED Smart Money Bot started successfully + POSITION AGGREGATION!');
+      this.logger.info('✅ OPTIMIZED Smart Money Bot started successfully + POSITION AGGREGATION + 48h DISCOVERY!');
       this.logger.info('📊 Real-time DEX monitoring active (OPTIMIZED)');
       this.logger.info('🔍 Smart Money flow analysis running (4h intervals)');
       this.logger.info('🎯 Advanced insider detection enabled (LIMITED)');
       this.logger.info('⚠️ Family wallet detection disabled');
       this.logger.info('🎯 Position splitting detection ENABLED');
+      this.logger.info('🚀 Wallet discovery: EVERY 48 HOURS (was 14 days)');
 
       process.on('SIGINT', () => this.shutdown());
       process.on('SIGTERM', () => this.shutdown());
@@ -367,7 +368,7 @@ class SmartMoneyBotRunner {
         '📡 <b>Real-time Webhooks</b>';
 
       await this.telegramNotifier.sendCycleLog(
-        `🟢 <b>OPTIMIZED Smart Money Bot Online + POSITION AGGREGATION!</b>\n\n` +
+        `🟢 <b>OPTIMIZED Smart Money Bot Online + POSITION AGGREGATION + 48h DISCOVERY!</b>\n\n` +
         `📊 Monitoring <code>${stats.active}</code> active wallets (<code>${stats.enabled}</code> enabled)\n` +
         `🔫 Snipers: <code>${stats.byCategory.sniper || 0}</code>\n` +
         `💡 Hunters: <code>${stats.byCategory.hunter || 0}</code>\n` +
@@ -380,7 +381,7 @@ class SmartMoneyBotRunner {
         `🎯 Monitoring: ${monitoringMode}\n` +
         `📈 Flow analysis: <b>Every 4 hours (OPTIMIZED)</b>\n` +
         `🔥 Hot token detection: <b>Every 4 hours</b>\n` +
-        `🔍 Wallet discovery: <b>Every 2 weeks (LIMITED to 20 candidates)</b>\n` +
+        `🔍 Wallet discovery: <b>Every 48 HOURS (was 14 days) with RELAXED criteria</b>\n` +
         `⚠️ Family detection: <b>Disabled</b>\n` +
         `🎯 Position splitting: <b>ENABLED for insider detection</b>\n\n` +
         `🚀 <b>API OPTIMIZATION ACTIVE:</b>\n` +
@@ -462,8 +463,8 @@ class SmartMoneyBotRunner {
     this.logger.info('🔄 OPTIMIZED Periodic Smart Money flow analysis started (4-hour intervals)');
   }
 
-  // 🔥 ОПТИМИЗИРОВАННЫЙ WALLET DISCOVERY: ЛИМИТ 20 КАНДИДАТОВ
-  private startWalletDiscoveryOptimized(): void {
+  // 🔥 НОВЫЙ МЕТОД: DISCOVERY КАЖДЫЕ 48 ЧАСОВ ВМЕСТО 14 ДНЕЙ!
+  private startWalletDiscoveryEvery48Hours(): void {
     const runWalletDiscovery = async () => {
       if (!this.isRunning) {
         this.logger.warn('⚠️ Bot not running, skipping wallet discovery');
@@ -471,16 +472,16 @@ class SmartMoneyBotRunner {
       }
       
       try {
-        this.logger.info('🔍 Starting OPTIMIZED wallet discovery process (LIMITED)...');
+        this.logger.info('🔍 Starting FREQUENT wallet discovery process (EVERY 48 HOURS with RELAXED criteria)...');
         
         const discoveryResults = await this.walletDiscovery.discoverSmartWallets();
         
         let newWallets = 0;
         let updatedWallets = 0;
         
-        // 🔥 ОГРАНИЧИВАЕМ количество новых кошельков: максимум 5 за раз
+        // 🔥 УВЕЛИЧИВАЕМ лимит новых кошельков с 5 до 10 (т.к. каждые 48 часов)
         let processedCount = 0;
-        const maxNewWallets = 5;
+        const maxNewWallets = 10; // Было 5
         
         for (const result of discoveryResults) {
           if (processedCount >= maxNewWallets) {
@@ -495,7 +496,7 @@ class SmartMoneyBotRunner {
               result.address,
               result.category,
               `Auto ${result.category} ${result.address.slice(0, 8)}`,
-              `Automatically discovered ${result.category} wallet (OPTIMIZED)`,
+              `Automatically discovered ${result.category} wallet (48h DISCOVERY)`,
               {
                 winRate: result.metrics.winRate,
                 totalPnL: result.metrics.totalPnL,
@@ -531,25 +532,25 @@ class SmartMoneyBotRunner {
           deactivated
         });
         
-        this.logger.info(`✅ OPTIMIZED Wallet discovery completed: ${newWallets} new, ${updatedWallets} updated, ${deactivated} deactivated (LIMITED)`);
+        this.logger.info(`✅ 48-HOUR Wallet discovery completed: ${newWallets} new, ${updatedWallets} updated, ${deactivated} deactivated`);
         
       } catch (error) {
-        this.logger.error('❌ Error in optimized wallet discovery:', error);
+        this.logger.error('❌ Error in 48-hour wallet discovery:', error);
       }
     };
 
-    // 🔥 ИСПРАВЛЕННЫЙ КОД: запуск через 1 час
-    this.logger.info('⏰ Wallet discovery will start in 1 hour...');
+    // 🔥 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: запуск через 1 час, потом каждые 48 ЧАСОВ!
+    this.logger.info('⏰ Wallet discovery will start in 1 hour, then every 48 HOURS...');
     
     const discoveryTimeout = setTimeout(async () => {
-      this.logger.info('⏰ 1 hour passed, starting wallet discovery...');
+      this.logger.info('⏰ 1 hour passed, starting first 48-hour discovery cycle...');
       await runWalletDiscovery();
       
-      // Повторяем каждые 2 недели
+      // 🔥 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: 14 дней → 48 ЧАСОВ!
       const discoveryInterval = setInterval(async () => {
-        this.logger.info('⏰ 2 weeks passed, running periodic wallet discovery...');
+        this.logger.info('⏰ 48 hours passed, running periodic wallet discovery...');
         await runWalletDiscovery();
-      }, 14 * 24 * 60 * 60 * 1000);
+      }, 48 * 60 * 60 * 1000); // 48 ЧАСОВ вместо 14 дней!
       
       this.intervalIds.push(discoveryInterval);
     }, 60 * 60 * 1000); // 1 час
@@ -557,7 +558,7 @@ class SmartMoneyBotRunner {
     // 🔥 ДОБАВЛЯЕМ TIMEOUT В СПИСОК ДЛЯ ОЧИСТКИ
     this.intervalIds.push(discoveryTimeout as any);
 
-    this.logger.info('🔄 OPTIMIZED Periodic wallet discovery scheduled (2 weeks, LIMITED to 5 new wallets)');
+    this.logger.info('🔄 FREQUENT Periodic wallet discovery scheduled (48 HOURS instead of 14 days, up to 10 new wallets with RELAXED criteria)');
   }
 
   // 🎯 НОВЫЙ МЕТОД: Периодические отчеты по агрегации позиций
@@ -642,7 +643,7 @@ class SmartMoneyBotRunner {
   }
 
   private async shutdown(): Promise<void> {
-    this.logger.info('🔴 Shutting down OPTIMIZED Smart Money Bot + POSITION AGGREGATION...');
+    this.logger.info('🔴 Shutting down OPTIMIZED Smart Money Bot + POSITION AGGREGATION + 48h DISCOVERY...');
     
     this.isRunning = false;
     
@@ -675,12 +676,12 @@ class SmartMoneyBotRunner {
     }
     
     try {
-      await this.telegramNotifier.sendCycleLog('🔴 <b>OPTIMIZED Smart Money Bot stopped + POSITION AGGREGATION</b>');
+      await this.telegramNotifier.sendCycleLog('🔴 <b>OPTIMIZED Smart Money Bot stopped + POSITION AGGREGATION + 48h DISCOVERY</b>');
     } catch (error) {
       this.logger.error('Failed to send shutdown notification:', error);
     }
     
-    this.logger.info('✅ OPTIMIZED Smart Money Bot shutdown completed + POSITION AGGREGATION');
+    this.logger.info('✅ OPTIMIZED Smart Money Bot shutdown completed + POSITION AGGREGATION + 48h DISCOVERY');
     process.exit(0);
   }
 }
@@ -690,7 +691,7 @@ const main = async () => {
     const bot = new SmartMoneyBotRunner();
     await bot.start();
   } catch (error) {
-    console.error('💥 Fatal error starting OPTIMIZED Smart Money Bot + POSITION AGGREGATION:', error);
+    console.error('💥 Fatal error starting OPTIMIZED Smart Money Bot + POSITION AGGREGATION + 48h DISCOVERY:', error);
     process.exit(1);
   }
 };
