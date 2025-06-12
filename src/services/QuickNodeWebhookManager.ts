@@ -1,4 +1,4 @@
-// src/services/QuickNodeWebhookManager.ts - ПОЛНАЯ ВЕРСИЯ с ALCHEMY + ВСЕ ИСПРАВЛЕНИЯ + MULTIPROVIDER
+// src/services/QuickNodeWebhookManager.ts - ПОЛНАЯ ВЕРСИЯ с ALCHEMY + ВСЕ ИСПРАВЛЕНИЯ + MULTIPROVIDER - ИСПРАВЛЕННЫЙ
 import { Logger } from '../utils/Logger';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { TelegramNotifier } from './TelegramNotifier';
@@ -681,12 +681,18 @@ export class QuickNodeWebhookManager {
     }
   }
 
-  // 🆕 УНИВЕРСАЛЬНЫЙ МЕТОД RPC ЗАПРОСОВ С МУЛЬТИ-ПРОВАЙДЕРАМИ
+  // 🔧 ИСПРАВЛЕНО: УНИВЕРСАЛЬНЫЙ МЕТОД RPC ЗАПРОСОВ С МУЛЬТИ-ПРОВАЙДЕРАМИ
   private async makeRpcRequest(method: string, params: any[], maxRetries: number = 2): Promise<any> {
     let lastError: any = null;
     
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       const provider = this.getCurrentProvider();
+      
+      // 🔧 ИСПРАВЛЕНИЕ: ПРОВЕРЯЕМ ЧТО ПРОВАЙДЕР СУЩЕСТВУЕТ
+      if (!provider) {
+        throw new Error('No healthy providers available');
+      }
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
       
@@ -736,19 +742,33 @@ export class QuickNodeWebhookManager {
     throw lastError || new Error(`All providers failed for ${method}`);
   }
 
-  // 🆕 ПОЛУЧЕНИЕ ТЕКУЩЕГО ПРОВАЙДЕРА
-  private getCurrentProvider(): RpcProvider {
+  // 🔧 ИСПРАВЛЕНО: ПОЛУЧЕНИЕ ТЕКУЩЕГО ПРОВАЙДЕРА С ПРОВЕРКАМИ
+  private getCurrentProvider(): RpcProvider | null {
+    // 🔧 ПРОВЕРЯЕМ ЧТО У НАС ЕСТЬ ПРОВАЙДЕРЫ
+    if (this.providers.length === 0) {
+      this.logger.error('No providers available');
+      return null;
+    }
+
+    // 🔧 НОРМАЛИЗУЕМ ИНДЕКС
+    if (this.currentProviderIndex >= this.providers.length) {
+      this.currentProviderIndex = 0;
+    }
+
     // Ищем здоровый провайдер
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[this.currentProviderIndex];
-      if (provider.isHealthy) {
+      
+      // 🔧 ИСПРАВЛЕНИЕ: ПРОВЕРЯЕМ ЧТО ПРОВАЙДЕР СУЩЕСТВУЕТ И isHealthy ЭТО СВОЙСТВО
+      if (provider && provider.isHealthy) {
         return provider;
       }
       this.currentProviderIndex = (this.currentProviderIndex + 1) % this.providers.length;
     }
     
-    // Если все нездоровы, возвращаем текущий
-    return this.providers[this.currentProviderIndex];
+    // Если все нездоровы, возвращаем первый доступный или null
+    const fallbackProvider = this.providers[0];
+    return fallbackProvider || null;
   }
 
   // 🆕 ПЕРЕКЛЮЧЕНИЕ НА СЛЕДУЮЩИЙ ПРОВАЙДЕР
@@ -761,7 +781,7 @@ export class QuickNodeWebhookManager {
     this.currentProviderIndex = (this.currentProviderIndex + 1) % this.providers.length;
     
     if (oldIndex !== this.currentProviderIndex) {
-      this.logger.info(`🔄 Switched from ${this.providers[oldIndex].name} to ${this.providers[this.currentProviderIndex].name}`);
+      this.logger.info(`🔄 Switched from ${this.providers[oldIndex]?.name || 'Unknown'} to ${this.providers[this.currentProviderIndex]?.name || 'Unknown'}`);
     }
     
     setTimeout(() => {
@@ -1078,7 +1098,7 @@ export class QuickNodeWebhookManager {
     }, 10);
   }
   
-  // 🆕 ОБНОВЛЕННЫЙ МЕТОД С СТАТИСТИКОЙ ПРОВАЙДЕРОВ
+  // 🔧 ИСПРАВЛЕНО: ОБНОВЛЕННЫЙ МЕТОД С СТАТИСТИКОЙ ПРОВАЙДЕРОВ
   private logApiUsageWithProviderStats(): void {
     const minuteUsage = (this.apiLimits.currentMinuteRequests / this.apiLimits.requestsPerMinute * 100).toFixed(1);
     const dayUsage = (this.apiLimits.currentDayRequests / this.apiLimits.requestsPerDay * 100).toFixed(1);
@@ -1086,7 +1106,7 @@ export class QuickNodeWebhookManager {
     const currentProvider = this.getCurrentProvider();
     const healthyProviders = this.providers.filter(p => p.isHealthy).length;
     
-    this.logger.info(`📊 API Usage: ${minuteUsage}% minute, ${dayUsage}% daily | Provider: ${currentProvider.name} | Healthy: ${healthyProviders}/${this.providers.length}`);
+    this.logger.info(`📊 API Usage: ${minuteUsage}% minute, ${dayUsage}% daily | Provider: ${currentProvider?.name || 'None'} | Healthy: ${healthyProviders}/${this.providers.length}`);
   }
 
   private async saveAndNotifySwap(swap: SmartMoneySwap): Promise<void> {
@@ -1252,7 +1272,7 @@ export class QuickNodeWebhookManager {
     }
   }
 
-  // 🆕 УЛУЧШЕННАЯ СТАТИСТИКА С МУЛЬТИ-ПРОВАЙДЕРАМИ И ПРОИЗВОДИТЕЛЬНОСТЬЮ
+  // 🔧 ИСПРАВЛЕНО: УЛУЧШЕННАЯ СТАТИСТИКА С МУЛЬТИ-ПРОВАЙДЕРАМИ И ПРОИЗВОДИТЕЛЬНОСТЬЮ
   getPollingStats() {
     const providerStats: ProviderStats[] = this.providers.map(p => {
       const responseTimes = this.providerResponseTimes.get(p.name) || [];
@@ -1272,9 +1292,11 @@ export class QuickNodeWebhookManager {
       };
     });
 
+    const currentProvider = this.getCurrentProvider();
+
     return {
       isActive: this.isPollingActive,
-      currentProvider: this.getCurrentProvider().name,
+      currentProvider: currentProvider?.name || 'None',
       monitoredWallets: this.monitoredWallets.length,
       processedWallets: this.lastProcessedSignatures.size,
       tokenCacheSize: this.tokenInfoCache.size,
