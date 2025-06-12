@@ -294,7 +294,8 @@ export class WebhookServer {
         }
 
         // Подсчитываем результаты
-        const successful = results.filter(r => r.status === 'fulfilled').length;
+        const allResults = [];
+        const successful = allResults.filter(r => r.status === 'fulfilled').length;
         const failed = results.filter(r => r.status === 'rejected').length;
 
         // Обновляем статистику

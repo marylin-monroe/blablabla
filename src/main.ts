@@ -28,6 +28,7 @@ class SmartMoneyBotRunner {
   private isRunning: boolean = false;
   private webhookId: string | null = null;
   private intervalIds: NodeJS.Timeout[] = [];
+  private timeoutIds: NodeJS.Timeout[] = []; // 🔧 НОВЫЙ МАССИВ ДЛЯ TIMEOUTS
 
   constructor() {
     this.logger = Logger.getInstance();
@@ -69,7 +70,10 @@ class SmartMoneyBotRunner {
       'QUICKNODE_HTTP_URL',
       'QUICKNODE_API_KEY',
       'TELEGRAM_BOT_TOKEN',
-      'TELEGRAM_USER_ID'
+      'TELEGRAM_USER_ID',
+      // 🔧 ДОБАВЛЕНЫ ALCHEMY ПЕРЕМЕННЫЕ
+      'ALCHEMY_HTTP_URL',
+      'ALCHEMY_API_KEY'
     ];
 
     const missing = requiredVars.filter(varName => !process.env[varName]);
@@ -542,6 +546,7 @@ class SmartMoneyBotRunner {
     // 🔥 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: запуск через 1 час, потом каждые 48 ЧАСОВ!
     this.logger.info('⏰ Wallet discovery will start in 1 hour, then every 48 HOURS...');
     
+    // 🔧 ИСПРАВЛЕНИЕ: ПРАВИЛЬНОЕ ХРАНЕНИЕ TIMEOUT
     const discoveryTimeout = setTimeout(async () => {
       this.logger.info('⏰ 1 hour passed, starting first 48-hour discovery cycle...');
       await runWalletDiscovery();
@@ -555,8 +560,8 @@ class SmartMoneyBotRunner {
       this.intervalIds.push(discoveryInterval);
     }, 60 * 60 * 1000); // 1 час
     
-    // 🔥 ДОБАВЛЯЕМ TIMEOUT В СПИСОК ДЛЯ ОЧИСТКИ
-    this.intervalIds.push(discoveryTimeout as any);
+    // 🔧 ИСПРАВЛЕНИЕ: ДОБАВЛЯЕМ TIMEOUT В ОТДЕЛЬНЫЙ МАССИВ
+    this.timeoutIds.push(discoveryTimeout);
 
     this.logger.info('🔄 FREQUENT Periodic wallet discovery scheduled (48 HOURS instead of 14 days, up to 10 new wallets with RELAXED criteria)');
   }
@@ -647,8 +652,13 @@ class SmartMoneyBotRunner {
     
     this.isRunning = false;
     
+    // 🔧 ИСПРАВЛЕНИЕ: ОЧИЩАЕМ ВСЕ INTERVALS И TIMEOUTS
     for (const intervalId of this.intervalIds) {
       clearInterval(intervalId);
+    }
+    
+    for (const timeoutId of this.timeoutIds) {
+      clearTimeout(timeoutId);
     }
     
     if (this.webhookServer) {
