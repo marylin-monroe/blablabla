@@ -1,4 +1,4 @@
-// src/services/QuickNodeWebhookManager.ts - ПОЛНАЯ ВЕРСИЯ с ALCHEMY + ВСЕ ИСПРАВЛЕНИЯ
+// src/services/QuickNodeWebhookManager.ts - ПОЛНАЯ ВЕРСИЯ с ALCHEMY + ВСЕ ИСПРАВЛЕНИЯ + MULTIPROVIDER
 import { Logger } from '../utils/Logger';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { TelegramNotifier } from './TelegramNotifier';
@@ -43,14 +43,35 @@ interface RpcProvider {
   errorCount: number;
   lastError?: string;
   lastErrorTime?: number;
+  type: 'quicknode' | 'alchemy';
+  priority: number; // 1-5, где 5 = высший приоритет
+}
+
+// 🆕 НОВЫЕ ИНТЕРФЕЙСЫ ДЛЯ MULTIPROVIDER
+interface ProviderStats {
+  name: string;
+  type: string;
+  requestCount: number;
+  errorCount: number;
+  successRate: number;
+  avgResponseTime: number;
+  isHealthy: boolean;
+  priority: number;
+}
+
+interface LoadBalancingResult {
+  provider: RpcProvider;
+  fallbackUsed: boolean;
+  responseTime: number;
 }
 
 export class QuickNodeWebhookManager {
   private logger: Logger;
   
-  // 🆕 МУЛЬТИ-ПРОВАЙДЕР СИСТЕМА
+  // 🆕 МУЛЬТИ-ПРОВАЙДЕР СИСТЕМА С УЛУЧШЕННОЙ ЛОГИКОЙ
   private providers: RpcProvider[] = [];
   private currentProviderIndex: number = 0;
+  private providerResponseTimes: Map<string, number[]> = new Map(); // Для отслеживания производительности
   
   private smDatabase: SmartMoneyDatabase | null = null;
   private telegramNotifier: TelegramNotifier | null = null;
@@ -90,11 +111,12 @@ export class QuickNodeWebhookManager {
     this.logger = Logger.getInstance();
     this.initializeProviders();
     this.startHealthCheck();
+    this.startProviderPerformanceTracking(); // 🆕 НОВЫЙ МЕТОД
   }
 
-  // 🆕 ИНИЦИАЛИЗАЦИЯ ПРОВАЙДЕРОВ
+  // 🆕 ИНИЦИАЛИЗАЦИЯ ПРОВАЙДЕРОВ С ПРИОРИТЕТАМИ
   private initializeProviders(): void {
-    // Основной провайдер - QuickNode
+    // Основной провайдер - QuickNode (высший приоритет)
     if (process.env.QUICKNODE_HTTP_URL && process.env.QUICKNODE_API_KEY) {
       this.providers.push({
         name: 'QuickNode',
@@ -102,12 +124,14 @@ export class QuickNodeWebhookManager {
         key: process.env.QUICKNODE_API_KEY,
         isHealthy: true,
         requestCount: 0,
-        errorCount: 0
+        errorCount: 0,
+        type: 'quicknode',
+        priority: 5 // Высший приоритет
       });
-      this.logger.info('✅ QuickNode provider initialized');
+      this.logger.info('✅ QuickNode provider initialized (Priority: 5)');
     }
 
-    // Резервный провайдер - Alchemy
+    // Резервный провайдер - Alchemy (высокий приоритет)
     if (process.env.ALCHEMY_HTTP_URL && process.env.ALCHEMY_API_KEY) {
       this.providers.push({
         name: 'Alchemy',
@@ -115,16 +139,83 @@ export class QuickNodeWebhookManager {
         key: process.env.ALCHEMY_API_KEY,
         isHealthy: true,
         requestCount: 0,
-        errorCount: 0
+        errorCount: 0,
+        type: 'alchemy',
+        priority: 4 // Высокий приоритет
       });
-      this.logger.info('✅ Alchemy provider initialized as fallback');
+      this.logger.info('✅ Alchemy provider initialized as backup (Priority: 4)');
     }
 
     if (this.providers.length === 0) {
       throw new Error('No RPC providers configured!');
     }
 
-    this.logger.info(`🚀 Initialized ${this.providers.length} RPC providers`);
+    this.logger.info(`🚀 Initialized ${this.providers.length} RPC providers with MultiProvider support`);
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ПРОВЕРКА ДОСТУПНОСТИ ПРОВАЙДЕРОВ
+  async checkProviderAvailability(): Promise<{
+    quickNodeAvailable: boolean;
+    alchemyAvailable: boolean;
+    activeProviders: number;
+    recommendedBatchSize: number;
+  }> {
+    const quickNode = this.providers.find(p => p.type === 'quicknode');
+    const alchemy = this.providers.find(p => p.type === 'alchemy');
+
+    const quickNodeAvailable = quickNode ? quickNode.isHealthy : false;
+    const alchemyAvailable = alchemy ? alchemy.isHealthy : false;
+    const activeProviders = this.providers.filter(p => p.isHealthy).length;
+
+    // Если доступен Alchemy - увеличиваем batch size
+    const recommendedBatchSize = alchemyAvailable ? 5 : 3;
+
+    return {
+      quickNodeAvailable,
+      alchemyAvailable,
+      activeProviders,
+      recommendedBatchSize
+    };
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ОТСЛЕЖИВАНИЕ ПРОИЗВОДИТЕЛЬНОСТИ ПРОВАЙДЕРОВ
+  private startProviderPerformanceTracking(): void {
+    // Каждые 5 минут анализируем производительность провайдеров
+    setInterval(() => {
+      this.analyzeProviderPerformance();
+    }, 5 * 60 * 1000); // 5 минут
+
+    this.logger.info('📊 Provider performance tracking started');
+  }
+
+  // 🆕 АНАЛИЗ ПРОИЗВОДИТЕЛЬНОСТИ ПРОВАЙДЕРОВ
+  private analyzeProviderPerformance(): void {
+    for (const provider of this.providers) {
+      const responseTimes = this.providerResponseTimes.get(provider.name) || [];
+      
+      if (responseTimes.length > 0) {
+        const avgResponseTime = responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length;
+        const successRate = provider.requestCount > 0 ? 
+          ((provider.requestCount - provider.errorCount) / provider.requestCount * 100) : 100;
+
+        // Если производительность падает - снижаем приоритет
+        if (avgResponseTime > 5000 || successRate < 80) { // >5s или <80% успешности
+          if (provider.priority > 1) {
+            provider.priority = Math.max(1, provider.priority - 1);
+            this.logger.warn(`⬇️ Lowered ${provider.name} priority to ${provider.priority} (performance issue)`);
+          }
+        } else if (avgResponseTime < 2000 && successRate > 95) {
+          // Хорошая производительность - повышаем приоритет
+          if (provider.priority < 5) {
+            provider.priority = Math.min(5, provider.priority + 1);
+            this.logger.info(`⬆️ Raised ${provider.name} priority to ${provider.priority} (good performance)`);
+          }
+        }
+
+        // Очищаем старые данные
+        this.providerResponseTimes.set(provider.name, []);
+      }
+    }
   }
 
   setDependencies(smDatabase: SmartMoneyDatabase, telegramNotifier: TelegramNotifier): void {
@@ -134,7 +225,7 @@ export class QuickNodeWebhookManager {
 
   async createDEXMonitoringStream(webhookUrl: string): Promise<string> {
     try {
-      this.logger.info('🔗 Creating QuickNode stream...');
+      this.logger.info('🔗 Creating QuickNode stream with MultiProvider support...');
 
       const dexPrograms = [
         'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', // Jupiter v6
@@ -209,7 +300,7 @@ export class QuickNodeWebhookManager {
     }
   }
 
-  // 🔥 СУПЕР ОПТИМИЗИРОВАННЫЙ POLLING MODE С МУЛЬТИ-ПРОВАЙДЕРАМИ
+  // 🔥 СУПЕР ОПТИМИЗИРОВАННЫЙ POLLING MODE С МУЛЬТИ-ПРОВАЙДЕРАМИ + LOAD BALANCING
   async startPollingMode(): Promise<void> {
     if (this.isPollingActive) return;
     if (!this.smDatabase || !this.telegramNotifier) {
@@ -217,7 +308,7 @@ export class QuickNodeWebhookManager {
       return;
     }
 
-    this.logger.info('🔄 Starting OPTIMIZED multi-provider polling mode...');
+    this.logger.info('🔄 Starting OPTIMIZED multi-provider polling mode with LOAD BALANCING...');
     
     try {
       // Получаем только включенные Smart Money кошельки
@@ -232,14 +323,14 @@ export class QuickNodeWebhookManager {
         return true;
       }).slice(0, 20); // МАКСИМУМ 20 кошельков!
 
-      this.logger.info(`🎯 Monitoring ${this.monitoredWallets.length}/20 TOP Smart Money wallets (Multi-Provider)`);
+      this.logger.info(`🎯 Monitoring ${this.monitoredWallets.length}/20 TOP Smart Money wallets (Multi-Provider + Load Balancing)`);
       this.isPollingActive = true;
 
       // 🚀 УВЕЛИЧЕННЫЙ ИНТЕРВАЛ: 5 МИНУТ
       this.pollingInterval = setInterval(async () => {
         try {
           if (this.canMakeRequest()) {
-            await this.pollSmartMoneyWallets();
+            await this.pollSmartMoneyWalletsWithLoadBalancing(); // 🆕 НОВЫЙ МЕТОД
           } else {
             this.logger.warn('⚠️ API rate limit reached, skipping polling cycle');
           }
@@ -251,11 +342,11 @@ export class QuickNodeWebhookManager {
       // Первый запуск через 10 секунд
       setTimeout(() => {
         if (this.canMakeRequest()) {
-          this.pollSmartMoneyWallets();
+          this.pollSmartMoneyWalletsWithLoadBalancing();
         }
       }, 10000);
 
-      this.logger.info('✅ OPTIMIZED multi-provider polling started: 5min intervals, max 20 wallets');
+      this.logger.info('✅ OPTIMIZED multi-provider polling started: 5min intervals, max 20 wallets, LOAD BALANCING enabled');
 
     } catch (error) {
       this.logger.error('❌ Failed to start optimized polling mode:', error);
@@ -271,8 +362,8 @@ export class QuickNodeWebhookManager {
     this.logger.info('🔴 Optimized polling mode stopped');
   }
 
-  // 🔥 ЗАЩИЩЕННЫЙ ОТ RACE CONDITIONS POLLING
-  private async pollSmartMoneyWallets(): Promise<void> {
+  // 🆕 НОВЫЙ МЕТОД: POLLING С LOAD BALANCING
+  private async pollSmartMoneyWalletsWithLoadBalancing(): Promise<void> {
     // 🔒 ЗАЩИТА ОТ ПАРАЛЛЕЛЬНОГО ВЫПОЛНЕНИЯ
     if (this.isPollingInProgress) {
       this.logger.warn('⚠️ Polling already in progress, skipping...');
@@ -283,38 +374,277 @@ export class QuickNodeWebhookManager {
 
     try {
       this.isPollingInProgress = true;
-      this.logger.info(`🔍 Polling ${this.monitoredWallets.length} Smart Money wallets...`);
+      this.logger.info(`🔍 Polling ${this.monitoredWallets.length} Smart Money wallets with LOAD BALANCING...`);
       
-      // 🔥 ОБРАБАТЫВАЕМ МАКСИМУМ 3 КОШЕЛЬКА ЗА РАЗ
-      const batchSize = 3;
+      // 🆕 ДИНАМИЧЕСКИЙ BATCH SIZE НА ОСНОВЕ ДОСТУПНЫХ ПРОВАЙДЕРОВ
+      const availability = await this.checkProviderAvailability();
+      const batchSize = availability.recommendedBatchSize;
+      
+      this.logger.info(`📊 Provider availability: QN=${availability.quickNodeAvailable}, Alchemy=${availability.alchemyAvailable}, BatchSize=${batchSize}`);
+      
       const batches = [];
-      
       for (let i = 0; i < this.monitoredWallets.length; i += batchSize) {
         batches.push(this.monitoredWallets.slice(i, i + batchSize));
       }
 
-      // Обрабатываем каждый батч с паузами
+      // Обрабатываем каждый батч с load balancing
       for (const batch of batches) {
         if (!this.canMakeRequest()) {
           this.logger.warn('⚠️ API limit reached, stopping polling for this cycle');
           break;
         }
 
-        const promises = batch.map(wallet => this.checkWalletForNewTransactions(wallet));
-        await Promise.allSettled(promises);
+        await this.processBatchWithLoadBalancing(batch); // 🆕 НОВЫЙ МЕТОД
         
         // 🔥 ПАУЗА между батчами: 5 секунд
         await this.sleep(5000);
       }
 
       // Логируем статистику API
-      this.logApiUsage();
+      this.logApiUsageWithProviderStats(); // 🆕 ОБНОВЛЕННЫЙ МЕТОД
 
     } catch (error) {
-      this.logger.error('❌ Error in optimized polling:', error);
+      this.logger.error('❌ Error in optimized polling with load balancing:', error);
     } finally {
       // 🔒 ВСЕГДА ОСВОБОЖДАЕМ ФЛАГ
       this.isPollingInProgress = false;
+    }
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ОБРАБОТКА БАТЧА С LOAD BALANCING
+  private async processBatchWithLoadBalancing(wallets: SmartMoneyWallet[]): Promise<void> {
+    const promises = wallets.map(async (wallet) => {
+      try {
+        // Выбираем лучший провайдер для этого запроса
+        const provider = this.selectBestProviderForRequest();
+        await this.checkWalletForNewTransactionsWithProvider(wallet, provider);
+      } catch (error) {
+        this.logger.error(`❌ Error processing wallet ${wallet.address}:`, error);
+      }
+    });
+
+    await Promise.allSettled(promises);
+  }
+
+  // 🆕 ВЫБОР ЛУЧШЕГО ПРОВАЙДЕРА ДЛЯ ЗАПРОСА
+  private selectBestProviderForRequest(): RpcProvider {
+    // Сортируем провайдеров по приоритету и здоровью
+    const healthyProviders = this.providers
+      .filter(p => p.isHealthy)
+      .sort((a, b) => {
+        // Сначала по приоритету, потом по количеству ошибок
+        if (a.priority !== b.priority) {
+          return b.priority - a.priority; // Высший приоритет первым
+        }
+        return a.errorCount - b.errorCount; // Меньше ошибок первым
+      });
+
+    if (healthyProviders.length === 0) {
+      // Если все нездоровы, возвращаем любой
+      return this.providers[0] || this.createFallbackProvider();
+    }
+
+    // Ротация между здоровыми провайдерами для распределения нагрузки
+    const selectedProvider = healthyProviders[this.currentProviderIndex % healthyProviders.length];
+    this.currentProviderIndex++;
+
+    return selectedProvider;
+  }
+
+  // 🆕 СОЗДАНИЕ FALLBACK ПРОВАЙДЕРА
+  private createFallbackProvider(): RpcProvider {
+    return {
+      name: 'Fallback',
+      url: 'https://api.mainnet-beta.solana.com',
+      isHealthy: false,
+      requestCount: 0,
+      errorCount: 0,
+      type: 'quicknode',
+      priority: 1
+    };
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ПРОВЕРКА КОШЕЛЬКА С КОНКРЕТНЫМ ПРОВАЙДЕРОМ
+  private async checkWalletForNewTransactionsWithProvider(wallet: SmartMoneyWallet, provider: RpcProvider): Promise<void> {
+    try {
+      if (!this.canMakeRequest()) return;
+
+      const walletAddress = wallet.address;
+      const lastSignature = this.lastProcessedSignatures.get(walletAddress);
+
+      this.trackApiRequest();
+      
+      let signatures: any[];
+      if (provider.type === 'alchemy') {
+        signatures = await this.getWalletSignaturesAlchemy(walletAddress, lastSignature, provider); // 🆕 НОВЫЙ МЕТОД
+      } else {
+        signatures = await this.getWalletSignatures(walletAddress, lastSignature);
+      }
+      
+      if (signatures.length === 0) return;
+
+      // Обновляем последнюю обработанную транзакцию
+      this.lastProcessedSignatures.set(walletAddress, signatures[0].signature);
+
+      // 🔥 ОБРАБАТЫВАЕМ ТОЛЬКО ПЕРВЫЕ 3 ТРАНЗАКЦИИ
+      for (const sigInfo of signatures.slice(0, 3).reverse()) {
+        try {
+          if (!this.canMakeRequest()) break;
+          
+          await this.processWalletTransactionWithProvider(sigInfo.signature, wallet, provider); // 🆕 НОВЫЙ МЕТОД
+          await this.sleep(200); // Пауза между транзакциями
+        } catch (error) {
+          this.logger.error(`❌ Error processing transaction ${sigInfo.signature}:`, error);
+        }
+      }
+
+    } catch (error) {
+      this.logger.error(`❌ Error checking wallet ${wallet.address} with ${provider.name}:`, error);
+    }
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ПОЛУЧЕНИЕ ТРАНЗАКЦИЙ ЧЕРЕЗ ALCHEMY
+  private async getWalletSignaturesAlchemy(walletAddress: string, beforeSignature?: string, provider?: RpcProvider): Promise<Array<{signature: string; blockTime: number}>> {
+    try {
+      const params: any = [
+        walletAddress,
+        {
+          limit: 5,
+          commitment: 'confirmed'
+        }
+      ];
+
+      if (beforeSignature) {
+        params[1].before = beforeSignature;
+      }
+
+      const data = await this.makeAlchemyRequest('getSignaturesForAddress', params, provider);
+      return data.result || [];
+
+    } catch (error) {
+      this.logger.error(`Error getting signatures for ${walletAddress} via Alchemy:`, error);
+      return [];
+    }
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ПОЛУЧЕНИЕ ДЕТАЛЕЙ ТРАНЗАКЦИИ ЧЕРЕЗ ALCHEMY
+  private async getTransactionDetailsAlchemy(signature: string, provider?: RpcProvider): Promise<any> {
+    try {
+      const data = await this.makeAlchemyRequest('getTransaction', [
+        signature,
+        {
+          encoding: 'jsonParsed',
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0
+        }
+      ], provider);
+
+      return data.result;
+
+    } catch (error) {
+      this.logger.error(`Error getting transaction details for ${signature} via Alchemy:`, error);
+      return null;
+    }
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ЗАПРОС К ALCHEMY
+  private async makeAlchemyRequest(method: string, params: any[], provider?: RpcProvider): Promise<any> {
+    const alchemyProvider = provider || this.providers.find(p => p.type === 'alchemy');
+    if (!alchemyProvider) {
+      throw new Error('Alchemy provider not available');
+    }
+
+    const startTime = Date.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    
+    try {
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method,
+        params
+      });
+
+      const response = await fetch(alchemyProvider.url, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${alchemyProvider.key}`
+        },
+        body,
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+      const responseTime = Date.now() - startTime;
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Обновляем статистику провайдера
+        alchemyProvider.requestCount++;
+        this.trackProviderResponseTime(alchemyProvider.name, responseTime);
+        
+        this.logger.debug(`✅ ${alchemyProvider.name} success: ${method} (${responseTime}ms)`);
+        return data;
+      } else {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+    } catch (error) {
+      clearTimeout(timeoutId);
+      alchemyProvider.errorCount++;
+      alchemyProvider.lastError = error instanceof Error ? error.message : 'Unknown error';
+      alchemyProvider.lastErrorTime = Date.now();
+      
+      this.logger.warn(`⚠️ ${alchemyProvider.name} failed for ${method}: ${alchemyProvider.lastError}`);
+      throw error;
+    }
+  }
+
+  // 🆕 ОТСЛЕЖИВАНИЕ ВРЕМЕНИ ОТВЕТА ПРОВАЙДЕРА
+  private trackProviderResponseTime(providerName: string, responseTime: number): void {
+    if (!this.providerResponseTimes.has(providerName)) {
+      this.providerResponseTimes.set(providerName, []);
+    }
+    
+    const times = this.providerResponseTimes.get(providerName)!;
+    times.push(responseTime);
+    
+    // Храним только последние 50 измерений
+    if (times.length > 50) {
+      times.shift();
+    }
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ОБРАБОТКА ТРАНЗАКЦИИ С КОНКРЕТНЫМ ПРОВАЙДЕРОМ
+  private async processWalletTransactionWithProvider(signature: string, wallet: SmartMoneyWallet, provider: RpcProvider): Promise<void> {
+    try {
+      if (!this.canMakeRequest()) return;
+
+      this.trackApiRequest();
+      
+      let transaction: any;
+      if (provider.type === 'alchemy') {
+        transaction = await this.getTransactionDetailsAlchemy(signature, provider);
+      } else {
+        transaction = await this.getTransactionDetails(signature);
+      }
+      
+      if (!transaction) return;
+
+      const swaps = await this.extractSwapsFromTransaction(transaction, wallet);
+      
+      for (const swap of swaps) {
+        if (this.shouldProcessSmartMoneySwapOptimized(swap, wallet)) {
+          await this.saveAndNotifySwap(swap);
+          this.logger.info(`🔥 SM swap: ${swap.tokenSymbol} - $${swap.amountUSD.toFixed(0)} (via ${provider.name})`);
+        }
+      }
+
+    } catch (error) {
+      this.logger.error(`Error processing transaction ${signature} with ${provider.name}:`, error);
     }
   }
 
@@ -747,12 +1077,15 @@ export class QuickNodeWebhookManager {
     }, 10);
   }
   
-  private logApiUsage(): void {
+  // 🆕 ОБНОВЛЕННЫЙ МЕТОД С СТАТИСТИКОЙ ПРОВАЙДЕРОВ
+  private logApiUsageWithProviderStats(): void {
     const minuteUsage = (this.apiLimits.currentMinuteRequests / this.apiLimits.requestsPerMinute * 100).toFixed(1);
     const dayUsage = (this.apiLimits.currentDayRequests / this.apiLimits.requestsPerDay * 100).toFixed(1);
     
     const currentProvider = this.getCurrentProvider();
-    this.logger.info(`📊 API Usage: ${minuteUsage}% minute, ${dayUsage}% daily | Provider: ${currentProvider.name}`);
+    const healthyProviders = this.providers.filter(p => p.isHealthy).length;
+    
+    this.logger.info(`📊 API Usage: ${minuteUsage}% minute, ${dayUsage}% daily | Provider: ${currentProvider.name} | Healthy: ${healthyProviders}/${this.providers.length}`);
   }
 
   private async saveAndNotifySwap(swap: SmartMoneySwap): Promise<void> {
@@ -918,17 +1251,25 @@ export class QuickNodeWebhookManager {
     }
   }
 
-  // 🆕 УЛУЧШЕННАЯ СТАТИСТИКА С МУЛЬТИ-ПРОВАЙДЕРАМИ
+  // 🆕 УЛУЧШЕННАЯ СТАТИСТИКА С МУЛЬТИ-ПРОВАЙДЕРАМИ И ПРОИЗВОДИТЕЛЬНОСТЬЮ
   getPollingStats() {
-    const providerStats = this.providers.map(p => ({
-      name: p.name,
-      isHealthy: p.isHealthy,
-      requestCount: p.requestCount,
-      errorCount: p.errorCount,
-      successRate: p.requestCount > 0 ? ((p.requestCount - p.errorCount) / p.requestCount * 100).toFixed(1) + '%' : '0%',
-      lastError: p.lastError,
-      lastErrorTime: p.lastErrorTime ? new Date(p.lastErrorTime).toISOString() : null
-    }));
+    const providerStats: ProviderStats[] = this.providers.map(p => {
+      const responseTimes = this.providerResponseTimes.get(p.name) || [];
+      const avgResponseTime = responseTimes.length > 0 ? 
+        responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length : 0;
+
+      return {
+        name: p.name,
+        type: p.type,
+        requestCount: p.requestCount,
+        errorCount: p.errorCount,
+        successRate: p.requestCount > 0 ? 
+          ((p.requestCount - p.errorCount) / p.requestCount * 100) : 100,
+        avgResponseTime,
+        isHealthy: p.isHealthy,
+        priority: p.priority
+      };
+    });
 
     return {
       isActive: this.isPollingActive,
@@ -953,8 +1294,66 @@ export class QuickNodeWebhookManager {
         priceCacheTTL: '5 minutes',
         minTradeAmount: '$8K+',
         raceConditionProtection: 'enabled',
-        multiProviderFailover: 'enabled'
+        multiProviderFailover: 'enabled',
+        loadBalancing: 'enabled', // 🆕 НОВАЯ ФИЧА
+        dynamicBatchSize: 'enabled' // 🆕 НОВАЯ ФИЧА
       }
     };
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ПОЛУЧЕНИЕ ДЕТАЛЬНОЙ СТАТИСТИКИ ПРОВАЙДЕРОВ
+  getDetailedProviderStats() {
+    return this.providers.map(provider => {
+      const responseTimes = this.providerResponseTimes.get(provider.name) || [];
+      const avgResponseTime = responseTimes.length > 0 ? 
+        responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length : 0;
+      const minResponseTime = responseTimes.length > 0 ? Math.min(...responseTimes) : 0;
+      const maxResponseTime = responseTimes.length > 0 ? Math.max(...responseTimes) : 0;
+
+      return {
+        name: provider.name,
+        type: provider.type,
+        url: provider.url,
+        isHealthy: provider.isHealthy,
+        priority: provider.priority,
+        requestCount: provider.requestCount,
+        errorCount: provider.errorCount,
+        successRate: provider.requestCount > 0 ? 
+          ((provider.requestCount - provider.errorCount) / provider.requestCount * 100) : 100,
+        responseTimeStats: {
+          avg: Math.round(avgResponseTime),
+          min: minResponseTime,
+          max: maxResponseTime,
+          sampleCount: responseTimes.length
+        },
+        lastError: provider.lastError,
+        lastErrorTime: provider.lastErrorTime ? new Date(provider.lastErrorTime).toISOString() : null,
+        healthScore: this.calculateProviderHealthScore(provider, avgResponseTime)
+      };
+    });
+  }
+
+  // 🆕 РАСЧЕТ HEALTH SCORE ПРОВАЙДЕРА
+  private calculateProviderHealthScore(provider: RpcProvider, avgResponseTime: number): number {
+    let score = 100;
+
+    // Штраф за ошибки
+    if (provider.requestCount > 0) {
+      const errorRate = provider.errorCount / provider.requestCount;
+      score -= errorRate * 50; // До -50 за 100% ошибок
+    }
+
+    // Штраф за медленность
+    if (avgResponseTime > 0) {
+      const slownessPenalty = Math.min(avgResponseTime / 1000 * 10, 30); // До -30 за >3s
+      score -= slownessPenalty;
+    }
+
+    // Штраф за нездоровое состояние
+    if (!provider.isHealthy) {
+      score -= 40;
+    }
+
+    return Math.max(0, Math.round(score));
   }
 }

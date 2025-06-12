@@ -1,4 +1,4 @@
-// src/services/SolanaMonitor.ts - С ДЕТЕКТОРОМ АГРЕГАЦИИ ПОЗИЦИЙ
+// src/services/SolanaMonitor.ts - С ДЕТЕКТОРОМ АГРЕГАЦИИ ПОЗИЦИЙ + НОВЫЕ МЕТОДЫ
 import { Database } from './Database';
 import { TelegramNotifier } from './TelegramNotifier';
 import { Logger } from '../utils/Logger';
@@ -42,6 +42,32 @@ interface AggregatedPosition {
   hasSimilarSizes: boolean;
   sizeTolerance: number; // В процентах
   suspicionScore: number; // 0-100
+  
+  // 🆕 ДОПОЛНИТЕЛЬНЫЕ ПОЛЯ ДЛЯ АНАЛИЗА
+  similarSizeCount: number;
+  walletAgeDays: number;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
+  detectionMethod: string;
+  confidenceLevel: number;
+}
+
+// 🆕 НОВЫЕ ИНТЕРФЕЙСЫ ДЛЯ РАСШИРЕННОГО АНАЛИЗА
+interface WalletAnalysis {
+  address: string;
+  ageDays: number;
+  totalTransactions: number;
+  avgTransactionSize: number;
+  suspiciousPatterns: string[];
+  riskScore: number;
+}
+
+interface TokenAnalysis {
+  address: string;
+  symbol: string;
+  ageDays: number;
+  totalHolders: number;
+  suspiciousActivity: boolean;
+  riskFactors: string[];
 }
 
 export class SolanaMonitor {
@@ -51,6 +77,10 @@ export class SolanaMonitor {
   
   // 🎯 АКТИВНЫЕ ПОЗИЦИИ ДЛЯ АГРЕГАЦИИ
   private activePositions = new Map<string, AggregatedPosition>();
+  
+  // 🆕 КЕШИ ДЛЯ АНАЛИЗА
+  private walletAnalysisCache = new Map<string, WalletAnalysis>();
+  private tokenAnalysisCache = new Map<string, TokenAnalysis>();
   
   // 🔧 НАСТРОЙКИ ДЕТЕКЦИИ
   private readonly config = {
@@ -72,7 +102,25 @@ export class SolanaMonitor {
     
     // Фильтры кошельков
     minWalletAge: 7,             // Минимум 7 дней возраст кошелька
-    maxWalletActivity: 100        // Максимум 100 транзакций за день (анти-бот)
+    maxWalletActivity: 100,       // Максимум 100 транзакций за день (анти-бот)
+    
+    // 🆕 НОВЫЕ НАСТРОЙКИ
+    highRiskThreshold: 85,        // Порог высокого риска
+    autoReportThreshold: 90,      // Автоматическая отправка при высоком риске
+    cacheExpiryMinutes: 30,       // Время жизни кеша анализа
+    maxActivePositions: 1000,     // Максимум активных позиций в памяти
+    positionCleanupInterval: 10   // Интервал очистки в минутах
+  };
+
+  // 🆕 СТАТИСТИКА РАБОТЫ
+  private stats = {
+    totalPositionsDetected: 0,
+    highRiskPositions: 0,
+    alertsSent: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    positionsProcessed: 0,
+    avgProcessingTime: 0
   };
 
   constructor(database: Database, telegramNotifier: TelegramNotifier) {
@@ -82,6 +130,12 @@ export class SolanaMonitor {
     
     // Запускаем периодическую проверку завершенных позиций
     this.startPositionMonitoring();
+    
+    // 🆕 ЗАПУСКАЕМ АВТОМАТИЧЕСКУЮ ОБРАБОТКУ ДЕТЕКЦИЙ
+    this.startAutomaticProcessing();
+    
+    // 🆕 ЗАПУСКАЕМ ОЧИСТКУ КЕШЕЙ
+    this.startCacheCleanup();
   }
 
   async processTransaction(txData: any): Promise<void> {
@@ -123,6 +177,8 @@ export class SolanaMonitor {
 
   // 🎯 ОСНОВНОЙ МЕТОД АГРЕГАЦИИ ПОЗИЦИЙ
   private async addToPositionAggregation(swap: TokenSwap): Promise<void> {
+    const startTime = Date.now();
+    
     try {
       // Фильтруем слишком крупные покупки (не разбивка)
       if (swap.amountUSD > this.config.maxIndividualUSD) {
@@ -151,38 +207,9 @@ export class SolanaMonitor {
       let position = this.activePositions.get(positionKey);
       
       if (!position) {
-        // Создаем новую позицию
-        position = {
-          walletAddress: swap.walletAddress,
-          tokenAddress: swap.tokenAddress,
-          tokenSymbol: swap.tokenSymbol,
-          tokenName: swap.tokenName,
-          purchases: [],
-          totalUSD: 0,
-          totalTokens: 0,
-          avgPrice: 0,
-          purchaseCount: 0,
-          firstBuyTime: swap.timestamp,
-          lastBuyTime: swap.timestamp,
-          timeWindowMinutes: 0,
-          avgPurchaseSize: 0,
-          maxPurchaseSize: 0,
-          minPurchaseSize: Infinity,
-          sizeStandardDeviation: 0,
-          sizeCoefficient: 0,
-          hasSimilarSizes: false,
-          sizeTolerance: 0,
-          suspicionScore: 0
-        };
-        this.activePositions.set(positionKey, position);
-      }
-
-      // Проверяем временное окно
-      const timeDiffMinutes = (swap.timestamp.getTime() - position.firstBuyTime.getTime()) / (1000 * 60);
-      
-      if (timeDiffMinutes > this.config.timeWindowMinutes) {
-        // Если вышли за временное окно - анализируем старую позицию и начинаем новую
-        await this.analyzePosition(position);
+        // 🆕 РАСШИРЕННЫЙ АНАЛИЗ ПРИ СОЗДАНИИ ПОЗИЦИИ
+        const walletAnalysis = await this.getWalletAnalysis(swap.walletAddress);
+        const tokenAnalysis = await this.getTokenAnalysis(swap.tokenAddress, swap.tokenSymbol);
         
         // Создаем новую позицию
         position = {
@@ -205,7 +232,52 @@ export class SolanaMonitor {
           sizeCoefficient: 0,
           hasSimilarSizes: false,
           sizeTolerance: 0,
-          suspicionScore: 0
+          suspicionScore: 0,
+          // 🆕 НОВЫЕ ПОЛЯ
+          similarSizeCount: 0,
+          walletAgeDays: walletAnalysis.ageDays,
+          riskLevel: 'LOW',
+          detectionMethod: 'position_aggregation',
+          confidenceLevel: 0
+        };
+        this.activePositions.set(positionKey, position);
+      }
+
+      // Проверяем временное окно
+      const timeDiffMinutes = (swap.timestamp.getTime() - position.firstBuyTime.getTime()) / (1000 * 60);
+      
+      if (timeDiffMinutes > this.config.timeWindowMinutes) {
+        // Если вышли за временное окно - анализируем старую позицию и начинаем новую
+        await this.analyzePosition(position);
+        
+        // Создаем новую позицию
+        const walletAnalysis = await this.getWalletAnalysis(swap.walletAddress);
+        position = {
+          walletAddress: swap.walletAddress,
+          tokenAddress: swap.tokenAddress,
+          tokenSymbol: swap.tokenSymbol,
+          tokenName: swap.tokenName,
+          purchases: [],
+          totalUSD: 0,
+          totalTokens: 0,
+          avgPrice: 0,
+          purchaseCount: 0,
+          firstBuyTime: swap.timestamp,
+          lastBuyTime: swap.timestamp,
+          timeWindowMinutes: 0,
+          avgPurchaseSize: 0,
+          maxPurchaseSize: 0,
+          minPurchaseSize: Infinity,
+          sizeStandardDeviation: 0,
+          sizeCoefficient: 0,
+          hasSimilarSizes: false,
+          sizeTolerance: 0,
+          suspicionScore: 0,
+          similarSizeCount: 0,
+          walletAgeDays: walletAnalysis.ageDays,
+          riskLevel: 'LOW',
+          detectionMethod: 'position_aggregation',
+          confidenceLevel: 0
         };
         this.activePositions.set(positionKey, position);
       }
@@ -223,16 +295,140 @@ export class SolanaMonitor {
 
       this.logger.debug(`Added to position: ${swap.tokenSymbol} - $${swap.amountUSD} (${position.purchaseCount} purchases, score: ${position.suspicionScore})`);
 
-      // Если достигли минимального количества покупок - проверяем на подозрительность
+      // 🆕 УЛУЧШЕННАЯ ПРОВЕРКА НА ПОДОЗРИТЕЛЬНОСТЬ
       if (position.purchaseCount >= this.config.minPurchaseCount) {
         if (position.suspicionScore >= this.config.minSuspicionScore) {
-          this.logger.info(`🎯 Suspicious position pattern detected: ${position.tokenSymbol} - $${position.totalUSD} in ${position.purchaseCount} purchases`);
+          this.logger.info(`🎯 Suspicious position pattern detected: ${position.tokenSymbol} - $${position.totalUSD} in ${position.purchaseCount} purchases (score: ${position.suspicionScore})`);
+          
+          // 🆕 АВТОМАТИЧЕСКАЯ ОТПРАВКА ПРИ ОЧЕНЬ ВЫСОКОМ РИСКЕ
+          if (position.suspicionScore >= this.config.autoReportThreshold) {
+            await this.sendPositionSplittingAlert(position);
+            this.stats.alertsSent++;
+          }
         }
       }
+
+      // Обновляем статистику
+      const processingTime = Date.now() - startTime;
+      this.stats.avgProcessingTime = (this.stats.avgProcessingTime + processingTime) / 2;
+      this.stats.positionsProcessed++;
 
     } catch (error) {
       this.logger.error('Error adding to position aggregation:', error);
     }
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: АНАЛИЗ КОШЕЛЬКА С КЕШИРОВАНИЕМ
+  private async getWalletAnalysis(walletAddress: string): Promise<WalletAnalysis> {
+    // Проверяем кеш
+    const cached = this.walletAnalysisCache.get(walletAddress);
+    if (cached && Date.now() - cached.ageDays < this.config.cacheExpiryMinutes * 60 * 1000) {
+      this.stats.cacheHits++;
+      return cached;
+    }
+
+    this.stats.cacheMisses++;
+
+    // Получаем информацию о кошельке
+    const walletInfo = await this.database.getWalletInfo(walletAddress);
+    const recentTxs = await this.database.getWalletTransactions(walletAddress, 50);
+    
+    const ageDays = walletInfo ? 
+      (Date.now() - walletInfo.createdAt.getTime()) / (1000 * 60 * 60 * 24) : 1;
+    
+    const avgTxSize = recentTxs.length > 0 ? 
+      recentTxs.reduce((sum, tx) => sum + tx.amountUSD, 0) / recentTxs.length : 0;
+
+    // 🆕 ДЕТЕКЦИЯ ПОДОЗРИТЕЛЬНЫХ ПАТТЕРНОВ
+    const suspiciousPatterns: string[] = [];
+    let riskScore = 0;
+
+    // Очень новый кошелек
+    if (ageDays < 1) {
+      suspiciousPatterns.push('very_new_wallet');
+      riskScore += 30;
+    } else if (ageDays < 7) {
+      suspiciousPatterns.push('new_wallet');
+      riskScore += 15;
+    }
+
+    // Высокая активность
+    if (recentTxs.length > 50) {
+      suspiciousPatterns.push('high_activity');
+      riskScore += 20;
+    }
+
+    // Крупные транзакции
+    if (avgTxSize > 50000) {
+      suspiciousPatterns.push('large_transactions');
+      riskScore += 10;
+    }
+
+    const analysis: WalletAnalysis = {
+      address: walletAddress,
+      ageDays,
+      totalTransactions: recentTxs.length,
+      avgTransactionSize: avgTxSize,
+      suspiciousPatterns,
+      riskScore
+    };
+
+    // Кешируем результат
+    this.walletAnalysisCache.set(walletAddress, analysis);
+    
+    return analysis;
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: АНАЛИЗ ТОКЕНА С КЕШИРОВАНИЕМ
+  private async getTokenAnalysis(tokenAddress: string, tokenSymbol: string): Promise<TokenAnalysis> {
+    // Проверяем кеш
+    const cached = this.tokenAnalysisCache.get(tokenAddress);
+    if (cached && Date.now() - cached.ageDays < this.config.cacheExpiryMinutes * 60 * 1000) {
+      this.stats.cacheHits++;
+      return cached;
+    }
+
+    this.stats.cacheMisses++;
+
+    // Получаем транзакции по токену
+    const tokenTxs = await this.database.getTransactionsByTokenAddress(tokenAddress, 100);
+    
+    // Примерный возраст токена
+    const ageDays = tokenTxs.length > 0 ? 
+      (Date.now() - Math.min(...tokenTxs.map(tx => tx.timestamp.getTime()))) / (1000 * 60 * 60 * 24) : 1;
+
+    // Уникальные держатели
+    const uniqueHolders = new Set(tokenTxs.map(tx => tx.walletAddress)).size;
+
+    // 🆕 ДЕТЕКЦИЯ ПОДОЗРИТЕЛЬНОЙ АКТИВНОСТИ
+    const riskFactors: string[] = [];
+    let suspiciousActivity = false;
+
+    // Очень новый токен
+    if (ageDays < 1) {
+      riskFactors.push('very_new_token');
+      suspiciousActivity = true;
+    }
+
+    // Мало держателей при высокой активности
+    if (tokenTxs.length > 50 && uniqueHolders < 10) {
+      riskFactors.push('concentrated_trading');
+      suspiciousActivity = true;
+    }
+
+    const analysis: TokenAnalysis = {
+      address: tokenAddress,
+      symbol: tokenSymbol,
+      ageDays,
+      totalHolders: uniqueHolders,
+      suspiciousActivity,
+      riskFactors
+    };
+
+    // Кешируем результат
+    this.tokenAnalysisCache.set(tokenAddress, analysis);
+    
+    return analysis;
   }
 
   // 🔧 ПЕРЕСЧЕТ МЕТРИК ПОЗИЦИИ
@@ -253,16 +449,26 @@ export class SolanaMonitor {
     position.sizeCoefficient = position.sizeStandardDeviation / mean;
     
     // 🎯 ДЕТЕКЦИЯ ПОХОЖИХ СУММ
-    position.hasSimilarSizes = this.detectSimilarSizes(amounts);
+    const similarSizeAnalysis = this.detectSimilarSizes(amounts);
+    position.hasSimilarSizes = similarSizeAnalysis.hasSimilar;
+    position.similarSizeCount = similarSizeAnalysis.count;
     position.sizeTolerance = this.calculateSizeTolerance(amounts);
     
     // 🎯 РАСЧЕТ ПОДОЗРИТЕЛЬНОСТИ
     position.suspicionScore = this.calculateSuspicionScore(position);
+    
+    // 🆕 ОПРЕДЕЛЕНИЕ УРОВНЯ РИСКА
+    position.riskLevel = this.determineRiskLevel(position.suspicionScore);
+    
+    // 🆕 РАСЧЕТ УВЕРЕННОСТИ В ДЕТЕКЦИИ
+    position.confidenceLevel = this.calculateConfidenceLevel(position);
   }
 
   // 🎯 ДЕТЕКЦИЯ ПОХОЖИХ СУММ (КЛЮЧЕВАЯ ЛОГИКА!)
-  private detectSimilarSizes(amounts: number[]): boolean {
-    if (amounts.length < this.config.minSimilarPurchases) return false;
+  private detectSimilarSizes(amounts: number[]): { hasSimilar: boolean; count: number } {
+    if (amounts.length < this.config.minSimilarPurchases) {
+      return { hasSimilar: false, count: 0 };
+    }
     
     // Группируем суммы с учетом толерантности
     const groups = new Map<number, number[]>();
@@ -286,13 +492,17 @@ export class SolanaMonitor {
     }
     
     // Проверяем, есть ли группа с достаточным количеством похожих сумм
+    let maxGroupSize = 0;
     for (const [_, groupAmounts] of groups) {
       if (groupAmounts.length >= this.config.minSimilarPurchases) {
-        return true;
+        maxGroupSize = Math.max(maxGroupSize, groupAmounts.length);
       }
     }
     
-    return false;
+    return {
+      hasSimilar: maxGroupSize >= this.config.minSimilarPurchases,
+      count: maxGroupSize
+    };
   }
 
   // 🎯 РАСЧЕТ ТОЛЕРАНТНОСТИ РАЗМЕРОВ
@@ -335,7 +545,7 @@ export class SolanaMonitor {
     return maxTolerance;
   }
 
-  // 🎯 РАСЧЕТ ПОДОЗРИТЕЛЬНОСТИ (0-100)
+  // 🎯 РАСЧЕТ ПОДОЗРИТЕЛЬНОСТИ (0-100) - УЛУЧШЕННЫЙ
   private calculateSuspicionScore(position: AggregatedPosition): number {
     let score = 0;
     
@@ -357,6 +567,9 @@ export class SolanaMonitor {
       if (position.sizeTolerance <= 1.0) score += 15; // Очень точно (≤1%)
       else if (position.sizeTolerance <= 2.0) score += 10; // Точно (≤2%)
       else if (position.sizeTolerance <= 5.0) score += 5;  // Приблизительно (≤5%)
+      
+      // 🆕 БОНУС ЗА КОЛИЧЕСТВО ПОХОЖИХ ПОКУПОК
+      score += Math.min(position.similarSizeCount * 2, 10);
     }
     
     // 4. Score за низкую вариативность (равномерность)
@@ -372,7 +585,43 @@ export class SolanaMonitor {
       score -= 15; // Штраф за большую разницу в размерах
     }
     
+    // 🆕 7. ДОПОЛНИТЕЛЬНЫЕ ФАКТОРЫ РИСКА
+    
+    // Возраст кошелька
+    if (position.walletAgeDays < 1) score += 20;
+    else if (position.walletAgeDays < 7) score += 10;
+    
+    // Размер отдельных покупок близок к лимиту
+    const avgCloseToLimit = position.avgPurchaseSize / this.config.maxIndividualUSD;
+    if (avgCloseToLimit > 0.8) score += 15; // Очень близко к лимиту
+    else if (avgCloseToLimit > 0.6) score += 10;
+    
     return Math.min(Math.max(score, 0), 100);
+  }
+
+  // 🆕 ОПРЕДЕЛЕНИЕ УРОВНЯ РИСКА
+  private determineRiskLevel(suspicionScore: number): 'LOW' | 'MEDIUM' | 'HIGH' {
+    if (suspicionScore >= this.config.highRiskThreshold) return 'HIGH';
+    if (suspicionScore >= this.config.minSuspicionScore) return 'MEDIUM';
+    return 'LOW';
+  }
+
+  // 🆕 РАСЧЕТ УВЕРЕННОСТИ В ДЕТЕКЦИИ
+  private calculateConfidenceLevel(position: AggregatedPosition): number {
+    let confidence = 50; // Базовая уверенность
+    
+    // Увеличиваем уверенность при наличии сильных сигналов
+    if (position.hasSimilarSizes) confidence += 30;
+    if (position.sizeCoefficient < 0.15) confidence += 20;
+    if (position.purchaseCount >= 5) confidence += 15;
+    if (position.timeWindowMinutes <= 60) confidence += 10;
+    
+    // Снижаем уверенность при слабых сигналах
+    if (position.purchaseCount < 4) confidence -= 20;
+    if (position.sizeTolerance > 5) confidence -= 15;
+    if (position.timeWindowMinutes > 120) confidence -= 10;
+    
+    return Math.min(Math.max(confidence, 0), 100);
   }
 
   // 🔍 ПРОВЕРКА ФИЛЬТРОВ КОШЕЛЬКА
@@ -381,25 +630,17 @@ export class SolanaMonitor {
     reason?: string;
   }> {
     try {
-      // Проверяем возраст кошелька и активность
-      const walletInfo = await this.database.getWalletInfo(walletAddress);
+      // Используем кешированный анализ
+      const analysis = await this.getWalletAnalysis(walletAddress);
       
-      if (walletInfo) {
-        // Проверяем возраст кошелька
-        const walletAgeDays = (Date.now() - walletInfo.createdAt.getTime()) / (1000 * 60 * 60 * 24);
-        if (walletAgeDays < this.config.minWalletAge) {
-          return { passed: false, reason: `Wallet too new (${walletAgeDays.toFixed(1)} days)` };
-        }
-        
-        // Проверяем активность (анти-бот)
-        const recentTransactions = await this.database.getWalletTransactions(walletAddress, 200);
-        const last24hTxs = recentTransactions.filter(tx => 
-          Date.now() - tx.timestamp.getTime() < 24 * 60 * 60 * 1000
-        );
-        
-        if (last24hTxs.length > this.config.maxWalletActivity) {
-          return { passed: false, reason: `Too active (${last24hTxs.length} txs in 24h)` };
-        }
+      // Проверяем возраст кошелька
+      if (analysis.ageDays < this.config.minWalletAge) {
+        return { passed: false, reason: `Wallet too new (${analysis.ageDays.toFixed(1)} days)` };
+      }
+      
+      // Проверяем активность (анти-бот)
+      if (analysis.totalTransactions > this.config.maxWalletActivity) {
+        return { passed: false, reason: `Too active (${analysis.totalTransactions} txs)` };
       }
       
       return { passed: true };
@@ -418,10 +659,45 @@ export class SolanaMonitor {
         return;
       }
 
+      // 🆕 СОХРАНЯЕМ В БАЗУ ДАННЫХ
+      const aggregationId = await this.database.savePositionAggregation({
+        walletAddress: position.walletAddress,
+        tokenAddress: position.tokenAddress,
+        tokenSymbol: position.tokenSymbol,
+        tokenName: position.tokenName,
+        totalUSD: position.totalUSD,
+        purchaseCount: position.purchaseCount,
+        avgPurchaseSize: position.avgPurchaseSize,
+        timeWindowMinutes: position.timeWindowMinutes,
+        suspicionScore: position.suspicionScore,
+        sizeTolerance: position.sizeTolerance,
+        firstBuyTime: position.firstBuyTime,
+        lastBuyTime: position.lastBuyTime,
+        purchases: position.purchases.map(p => ({
+          transactionId: p.transactionId,
+          amountUSD: p.amountUSD,
+          timestamp: p.timestamp
+        })),
+        // 🆕 ДОПОЛНИТЕЛЬНЫЕ ПОЛЯ
+        maxPurchaseSize: position.maxPurchaseSize,
+        minPurchaseSize: position.minPurchaseSize,
+        sizeStdDeviation: position.sizeStandardDeviation,
+        sizeCoefficient: position.sizeCoefficient,
+        similarSizeCount: position.similarSizeCount,
+        walletAgeDays: position.walletAgeDays,
+        riskLevel: position.riskLevel
+      });
+
       // Отправляем алерт о подозрительной позиции
       await this.sendPositionSplittingAlert(position);
       
-      this.logger.info(`🚨 Position splitting detected: ${position.tokenSymbol} - $${position.totalUSD.toFixed(0)} in ${position.purchaseCount} purchases (score: ${position.suspicionScore})`);
+      this.logger.info(`🚨 Position splitting detected and saved: ${position.tokenSymbol} - $${position.totalUSD.toFixed(0)} in ${position.purchaseCount} purchases (score: ${position.suspicionScore}, ID: ${aggregationId})`);
+
+      // Обновляем статистику
+      this.stats.totalPositionsDetected++;
+      if (position.riskLevel === 'HIGH') {
+        this.stats.highRiskPositions++;
+      }
 
     } catch (error) {
       this.logger.error('Error analyzing position:', error);
@@ -434,7 +710,8 @@ export class SolanaMonitor {
            position.totalUSD >= this.config.minTotalUSD &&
            position.suspicionScore >= this.config.minSuspicionScore &&
            position.hasSimilarSizes &&
-           position.timeWindowMinutes <= this.config.timeWindowMinutes;
+           position.timeWindowMinutes <= this.config.timeWindowMinutes &&
+           position.confidenceLevel >= 60; // 🆕 МИНИМАЛЬНАЯ УВЕРЕННОСТЬ
   }
 
   // 📢 ОТПРАВКА АЛЕРТА О РАЗБИВКЕ ПОЗИЦИИ
@@ -460,6 +737,8 @@ export class SolanaMonitor {
         }))
       });
 
+      this.stats.alertsSent++;
+
     } catch (error) {
       this.logger.error('Error sending position splitting alert:', error);
     }
@@ -473,6 +752,27 @@ export class SolanaMonitor {
     }, 5 * 60 * 1000); // 5 минут
 
     this.logger.info('🕒 Position monitoring started: checking every 5 minutes');
+  }
+
+  // 🆕 АВТОМАТИЧЕСКАЯ ОБРАБОТКА ДЕТЕКЦИЙ
+  private startAutomaticProcessing(): void {
+    // Обрабатываем необработанные позиции каждые 2 минуты
+    setInterval(async () => {
+      await this.processUnhandledDetections();
+    }, 2 * 60 * 1000); // 2 минуты
+
+    this.logger.info('🤖 Automatic processing started: every 2 minutes');
+  }
+
+  // 🆕 ОЧИСТКА КЕШЕЙ
+  private startCacheCleanup(): void {
+    // Очищаем кеши каждые 30 минут
+    setInterval(() => {
+      this.cleanupCaches();
+      this.cleanupActivePositions();
+    }, 30 * 60 * 1000); // 30 минут
+
+    this.logger.info('🧹 Cache cleanup started: every 30 minutes');
   }
 
   // 🕒 ПРОВЕРКА ИСТЕКШИХ ПОЗИЦИЙ
@@ -497,6 +797,96 @@ export class SolanaMonitor {
     
     if (expiredPositions.length > 0) {
       this.logger.debug(`🧹 Cleaned up ${expiredPositions.length} expired positions`);
+    }
+  }
+
+  // 🆕 ОБРАБОТКА НЕОБРАБОТАННЫХ ДЕТЕКЦИЙ
+  private async processUnhandledDetections(): Promise<void> {
+    try {
+      const unprocessed = await this.database.getUnprocessedPositionAggregations(20);
+      
+      for (const detection of unprocessed) {
+        if (detection.suspicionScore >= this.config.autoReportThreshold) {
+          // Отправляем алерт для высокорисковых позиций
+          await this.telegramNotifier.sendCycleLog(
+            `🚨 <b>HIGH RISK POSITION DETECTED</b>\n\n` +
+            `💰 Total: <code>$${this.formatNumber(detection.totalUSD)}</code>\n` +
+            `🪙 Token: <code>#${detection.tokenSymbol}</code>\n` +
+            `👤 Wallet: <code>${detection.walletAddress.slice(0, 8)}...${detection.walletAddress.slice(-4)}</code>\n` +
+            `🎯 Risk Score: <code>${detection.suspicionScore}/100</code>\n` +
+            `🔢 Purchases: <code>${detection.purchaseCount}</code>\n\n` +
+            `<a href="https://solscan.io/token/${detection.tokenAddress}">Token</a> | <a href="https://solscan.io/account/${detection.walletAddress}">Wallet</a>`
+          );
+          
+          await this.database.markPositionAggregationAsProcessed(detection.id, true);
+        } else {
+          // Просто помечаем как обработанное
+          await this.database.markPositionAggregationAsProcessed(detection.id, false);
+        }
+      }
+      
+      if (unprocessed.length > 0) {
+        this.logger.info(`🤖 Processed ${unprocessed.length} unhandled detections`);
+      }
+      
+    } catch (error) {
+      this.logger.error('Error processing unhandled detections:', error);
+    }
+  }
+
+  // 🆕 ОЧИСТКА КЕШЕЙ
+  private cleanupCaches(): void {
+    const now = Date.now();
+    const expiryMs = this.config.cacheExpiryMinutes * 60 * 1000;
+    
+    // Очищаем кеш анализа кошельков
+    let walletCacheCleared = 0;
+    for (const [key, analysis] of this.walletAnalysisCache) {
+      if (now - analysis.ageDays > expiryMs) {
+        this.walletAnalysisCache.delete(key);
+        walletCacheCleared++;
+      }
+    }
+    
+    // Очищаем кеш анализа токенов
+    let tokenCacheCleared = 0;
+    for (const [key, analysis] of this.tokenAnalysisCache) {
+      if (now - analysis.ageDays > expiryMs) {
+        this.tokenAnalysisCache.delete(key);
+        tokenCacheCleared++;
+      }
+    }
+    
+    if (walletCacheCleared > 0 || tokenCacheCleared > 0) {
+      this.logger.debug(`🧹 Cache cleanup: ${walletCacheCleared} wallets, ${tokenCacheCleared} tokens`);
+    }
+  }
+
+  // 🆕 ОЧИСТКА АКТИВНЫХ ПОЗИЦИЙ
+  private cleanupActivePositions(): void {
+    if (this.activePositions.size > this.config.maxActivePositions) {
+      // Удаляем самые старые позиции
+      const sortedPositions = Array.from(this.activePositions.entries())
+        .sort(([,a], [,b]) => a.firstBuyTime.getTime() - b.firstBuyTime.getTime());
+      
+      const toRemove = sortedPositions.slice(0, this.activePositions.size - this.config.maxActivePositions);
+      
+      for (const [key] of toRemove) {
+        this.activePositions.delete(key);
+      }
+      
+      this.logger.info(`🧹 Removed ${toRemove.length} old active positions (limit: ${this.config.maxActivePositions})`);
+    }
+  }
+
+  // 🆕 ФОРМАТИРОВАНИЕ ЧИСЕЛ
+  private formatNumber(num: number): string {
+    if (num >= 1_000_000) {
+      return `${(num / 1_000_000).toFixed(1)}M`;
+    } else if (num >= 1_000) {
+      return `${(num / 1_000).toFixed(1)}K`;
+    } else {
+      return num.toFixed(0);
     }
   }
 
@@ -550,6 +940,13 @@ export class SolanaMonitor {
     return {
       activePositions: this.activePositions.size,
       config: this.config,
+      stats: this.stats,
+      cacheStats: {
+        walletAnalysisCache: this.walletAnalysisCache.size,
+        tokenAnalysisCache: this.tokenAnalysisCache.size,
+        cacheHitRate: this.stats.cacheHits > 0 ? 
+          (this.stats.cacheHits / (this.stats.cacheHits + this.stats.cacheMisses) * 100).toFixed(1) + '%' : '0%'
+      },
       positions: Array.from(this.activePositions.values()).map(p => ({
         wallet: `${p.walletAddress.slice(0, 8)}...${p.walletAddress.slice(-4)}`,
         token: p.tokenSymbol,
@@ -557,8 +954,77 @@ export class SolanaMonitor {
         totalUSD: p.totalUSD,
         suspicionScore: p.suspicionScore,
         hasSimilarSizes: p.hasSimilarSizes,
-        timeWindow: p.timeWindowMinutes
+        timeWindow: p.timeWindowMinutes,
+        riskLevel: p.riskLevel,
+        confidence: p.confidenceLevel
       }))
     };
+  }
+
+  // 🆕 НОВЫЕ МЕТОДЫ ДЛЯ ВНЕШНЕГО ИСПОЛЬЗОВАНИЯ
+
+  // Получение статистики детекций
+  getDetectionStats() {
+    return {
+      totalDetected: this.stats.totalPositionsDetected,
+      highRiskDetected: this.stats.highRiskPositions,
+      alertsSent: this.stats.alertsSent,
+      avgProcessingTime: this.stats.avgProcessingTime,
+      activePositions: this.activePositions.size
+    };
+  }
+
+  // Принудительная проверка всех активных позиций
+  async forceCheckAllPositions(): Promise<number> {
+    let processed = 0;
+    
+    for (const [key, position] of this.activePositions) {
+      if (position.suspicionScore >= this.config.minSuspicionScore) {
+        await this.analyzePosition(position);
+        this.activePositions.delete(key);
+        processed++;
+      }
+    }
+    
+    this.logger.info(`🔍 Force-checked all positions: ${processed} analyzed`);
+    return processed;
+  }
+
+  // Получение позиции по ключу
+  getActivePosition(walletAddress: string, tokenAddress: string): AggregatedPosition | null {
+    const key = `${walletAddress}-${tokenAddress}`;
+    return this.activePositions.get(key) || null;
+  }
+
+  // 🆕 МЕТОД ПРОВЕРКИ НА АГРЕГАЦИЮ (ДЛЯ ДРУГИХ СЕРВИСОВ)
+  async checkForPositionAggregation(walletAddress: string, tokenAddress: string, amountUSD: number): Promise<{
+    isPartOfAggregation: boolean;
+    suspicionScore: number;
+    aggregationId?: number;
+  }> {
+    try {
+      const positionKey = `${walletAddress}-${tokenAddress}`;
+      const position = this.activePositions.get(positionKey);
+      
+      if (position && position.purchaseCount >= this.config.minPurchaseCount) {
+        return {
+          isPartOfAggregation: true,
+          suspicionScore: position.suspicionScore,
+          aggregationId: undefined // Будет установлен при сохранении в БД
+        };
+      }
+      
+      return {
+        isPartOfAggregation: false,
+        suspicionScore: 0
+      };
+      
+    } catch (error) {
+      this.logger.error('Error checking for position aggregation:', error);
+      return {
+        isPartOfAggregation: false,
+        suspicionScore: 0
+      };
+    }
   }
 }

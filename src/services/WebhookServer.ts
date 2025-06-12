@@ -1,4 +1,4 @@
-// src/services/WebhookServer.ts - С ФИЛЬТРАМИ SMART MONEY + АГРЕГАЦИЯ ПОЗИЦИЙ
+// src/services/WebhookServer.ts - С ФИЛЬТРАМИ SMART MONEY + АГРЕГАЦИЯ ПОЗИЦИЙ + ИНТЕГРАЦИЯ SOLANA MONITOR
 import express from 'express';
 import { Database } from './Database';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
@@ -75,6 +75,39 @@ interface SmartMoneyValidationResult {
   riskScore: number; // 0-100
 }
 
+// 🆕 НОВЫЕ ИНТЕРФЕЙСЫ ДЛЯ СТАТИСТИКИ И МОНИТОРИНГА
+interface ProcessingStats {
+  totalTransactionsProcessed: number;
+  smartMoneyTransactions: number;
+  regularTransactions: number;
+  positionAggregations: number; // 🆕 НОВОЕ ПОЛЕ
+  alertsSent: number;
+  filteredTransactions: number;
+  errorCount: number;
+  avgProcessingTime: number;
+  lastProcessedTime: Date;
+  // 🆕 ДЕТАЛЬНАЯ СТАТИСТИКА ПО ТИПАМ
+  transactionTypes: {
+    swaps: number;
+    transfers: number;
+    other: number;
+  };
+  riskLevels: {
+    high: number;
+    medium: number;
+    low: number;
+  };
+}
+
+interface PerformanceMetrics {
+  memoryUsage: NodeJS.MemoryUsage;
+  cpuUsage: number;
+  activeConnections: number;
+  requestsPerMinute: number;
+  errorsPerMinute: number;
+  cacheHitRate: number;
+}
+
 export class WebhookServer {
   private app: express.Application;
   private server: any;
@@ -116,6 +149,37 @@ export class WebhookServer {
   // 🧹 АВТООЧИСТКА КЕШЕЙ ОТ СТАРЫХ ЗАПИСЕЙ
   private cacheCleanupInterval: NodeJS.Timeout | null = null;
 
+  // 🆕 СТАТИСТИКА И МОНИТОРИНГ
+  private processingStats: ProcessingStats = {
+    totalTransactionsProcessed: 0,
+    smartMoneyTransactions: 0,
+    regularTransactions: 0,
+    positionAggregations: 0,
+    alertsSent: 0,
+    filteredTransactions: 0,
+    errorCount: 0,
+    avgProcessingTime: 0,
+    lastProcessedTime: new Date(),
+    transactionTypes: {
+      swaps: 0,
+      transfers: 0,
+      other: 0
+    },
+    riskLevels: {
+      high: 0,
+      medium: 0,
+      low: 0
+    }
+  };
+
+  // 🆕 МЕТРИКИ ПРОИЗВОДИТЕЛЬНОСТИ
+  private performanceInterval: NodeJS.Timeout | null = null;
+  private requestCounters = {
+    lastMinuteRequests: 0,
+    lastMinuteErrors: 0,
+    lastMinuteReset: Date.now() + 60000
+  };
+
   constructor(
     database: Database,
     telegramNotifier: TelegramNotifier,
@@ -135,6 +199,12 @@ export class WebhookServer {
     
     // 🧹 ЗАПУСКАЕМ АВТООЧИСТКУ КЕШЕЙ КАЖДЫЕ 30 МИНУТ
     this.startCacheCleanup();
+    
+    // 🆕 ЗАПУСКАЕМ МОНИТОРИНГ ПРОИЗВОДИТЕЛЬНОСТИ
+    this.startPerformanceMonitoring();
+    
+    // 🆕 ЗАПУСКАЕМ ПЕРИОДИЧЕСКУЮ ОТПРАВКУ СТАТИСТИКИ
+    this.startStatsReporting();
   }
 
   private setupMiddleware(): void {
@@ -147,43 +217,110 @@ export class WebhookServer {
       next();
     });
 
+    // 🆕 MIDDLEWARE ДЛЯ ОТСЛЕЖИВАНИЯ ЗАПРОСОВ
     this.app.use((req, res, next) => {
+      const now = Date.now();
+      
+      // Сброс счетчиков каждую минуту
+      if (now > this.requestCounters.lastMinuteReset) {
+        this.requestCounters.lastMinuteRequests = 0;
+        this.requestCounters.lastMinuteErrors = 0;
+        this.requestCounters.lastMinuteReset = now + 60000;
+      }
+      
+      this.requestCounters.lastMinuteRequests++;
+      
       this.logger.debug(`${req.method} ${req.path} - ${req.ip}`);
       next();
+    });
+
+    // 🆕 ERROR HANDLING MIDDLEWARE
+    this.app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+      this.requestCounters.lastMinuteErrors++;
+      this.processingStats.errorCount++;
+      this.logger.error('Express error:', err);
+      
+      res.status(500).json({
+        error: 'Internal server error',
+        timestamp: new Date().toISOString()
+      });
     });
   }
 
   private setupRoutes(): void {
     this.app.get('/health', (req, res) => {
+      const solanaStats = this.solanaMonitor.getAggregationStats();
+      
       res.json({
         status: 'healthy',
         timestamp: new Date().toISOString(),
-        service: 'Smart Money Tracker Background Worker (WITH FILTERS + POSITION AGGREGATION)',
-        version: '3.2.0',
+        service: 'Smart Money Tracker Background Worker (WITH FILTERS + POSITION AGGREGATION + SOLANA MONITOR INTEGRATION)',
+        version: '3.3.0',
         uptime: process.uptime(),
         filters: {
           tokenCreatorCheck: 'enabled',
           topHolderFilter: 'enabled',
           relatedWalletDetection: 'enabled',
           riskScoring: 'enabled',
-          positionAggregation: 'enabled'
+          positionAggregation: 'enabled',
+          solanaMonitorIntegration: 'enabled' // 🆕 НОВАЯ ФИЧА
+        },
+        // 🆕 ИНТЕГРАЦИЯ СО СТАТИСТИКОЙ SOLANA MONITOR
+        aggregationStats: {
+          activePositions: solanaStats.activePositions,
+          totalDetected: solanaStats.stats?.totalPositionsDetected || 0,
+          alertsSent: solanaStats.stats?.alertsSent || 0
         }
       });
     });
 
     this.app.post('/webhook', async (req, res) => {
+      const startTime = Date.now();
+      
       try {
         const webhookData: HeliusWebhookPayload[] = Array.isArray(req.body) ? req.body : [req.body];
         
         this.logger.info(`📡 Received webhook with ${webhookData.length} transactions`);
 
-        for (const txData of webhookData) {
-          await this.processWebhookTransaction(txData);
+        // 🆕 ПАРАЛЛЕЛЬНАЯ ОБРАБОТКА С ОГРАНИЧЕНИЕМ
+        const batchSize = 5; // Обрабатываем максимум 5 транзакций параллельно
+        const results = [];
+        
+        for (let i = 0; i < webhookData.length; i += batchSize) {
+          const batch = webhookData.slice(i, i + batchSize);
+          const batchPromises = batch.map(txData => this.processWebhookTransactionWithStats(txData));
+          const batchResults = await Promise.allSettled(batchPromises);
+          results.push(...batchResults);
         }
 
-        res.status(200).json({ success: true, processed: webhookData.length });
+        // Подсчитываем результаты
+        const successful = results.filter(r => r.status === 'fulfilled').length;
+        const failed = results.filter(r => r.status === 'rejected').length;
+
+        // Обновляем статистику
+        this.processingStats.totalTransactionsProcessed += webhookData.length;
+        this.processingStats.lastProcessedTime = new Date();
+        
+        const processingTime = Date.now() - startTime;
+        this.processingStats.avgProcessingTime = 
+          (this.processingStats.avgProcessingTime + processingTime) / 2;
+
+        res.status(200).json({ 
+          success: true, 
+          processed: successful,
+          failed: failed,
+          totalReceived: webhookData.length,
+          processingTimeMs: processingTime,
+          // 🆕 ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ
+          stats: {
+            positionAggregations: this.processingStats.positionAggregations,
+            alertsSent: this.processingStats.alertsSent
+          }
+        });
+        
       } catch (error) {
         this.logger.error('❌ Error processing webhook:', error as Error);
+        this.processingStats.errorCount++;
         res.status(500).json({ error: 'Internal server error' });
       }
     });
@@ -192,16 +329,24 @@ export class WebhookServer {
       try {
         this.logger.info('🧪 Test endpoint called');
         
+        // 🆕 ТЕСТИРУЕМ ИНТЕГРАЦИЮ С SOLANA MONITOR
+        const solanaStats = this.solanaMonitor.getAggregationStats();
+        
         await this.telegramNotifier.sendCycleLog(
           '🧪 <b>Test notification</b>\n' +
-          `Background Worker is running correctly (WITH SMART MONEY FILTERS + POSITION AGGREGATION)\n` +
-          `Timestamp: <code>${new Date().toISOString()}</code>`
+          `Background Worker is running correctly (WITH SMART MONEY FILTERS + POSITION AGGREGATION + SOLANA MONITOR)\n` +
+          `Timestamp: <code>${new Date().toISOString()}</code>\n\n` +
+          `🎯 <b>Solana Monitor Stats:</b>\n` +
+          `• Active positions: <code>${solanaStats.activePositions}</code>\n` +
+          `• Cache hit rate: <code>${solanaStats.cacheStats?.cacheHitRate || '0%'}</code>\n` +
+          `• Total detected: <code>${solanaStats.stats?.totalPositionsDetected || 0}</code>`
         );
 
         res.json({ 
           success: true, 
-          message: 'Test notification sent',
-          timestamp: new Date().toISOString()
+          message: 'Test notification sent with Solana Monitor integration',
+          timestamp: new Date().toISOString(),
+          solanaMonitorStats: solanaStats
         });
       } catch (error) {
         this.logger.error('❌ Error in test endpoint:', error as Error);
@@ -209,10 +354,13 @@ export class WebhookServer {
       }
     });
 
+    // 🆕 РАСШИРЕННАЯ СТАТИСТИКА С ИНТЕГРАЦИЕЙ SOLANA MONITOR
     this.app.get('/stats', async (req, res) => {
       try {
         const dbStats = await this.smDatabase.getWalletStats();
         const recentTransactions = await this.database.getRecentTransactions(24);
+        const solanaStats = this.solanaMonitor.getAggregationStats();
+        const performanceMetrics = this.getPerformanceMetrics();
         
         res.json({
           smartMoneyWallets: dbStats,
@@ -223,14 +371,23 @@ export class WebhookServer {
           service: {
             uptime: process.uptime(),
             memory: process.memoryUsage(),
-            version: '3.2.0'
+            version: '3.3.0'
           },
           filters: {
             tokenInfoCacheSize: this.tokenInfoCache.size,
             holdersCache: this.topHoldersCache.size,
             relatedWalletsCache: this.relatedWalletsCache.size,
             recentTxCache: this.recentTxCache.size
-          }
+          },
+          // 🆕 СТАТИСТИКА ОБРАБОТКИ
+          processing: this.processingStats,
+          // 🆕 ИНТЕГРАЦИЯ СО СТАТИСТИКОЙ SOLANA MONITOR
+          positionAggregation: {
+            solanaMonitor: solanaStats,
+            database: await this.database.getPositionAggregationStats()
+          },
+          // 🆕 МЕТРИКИ ПРОИЗВОДИТЕЛЬНОСТИ
+          performance: performanceMetrics
         });
       } catch (error) {
         this.logger.error('❌ Error getting stats:', error as Error);
@@ -238,9 +395,84 @@ export class WebhookServer {
       }
     });
 
+    // 🆕 НОВЫЙ ENDPOINT ДЛЯ ПРИНУДИТЕЛЬНОЙ ПРОВЕРКИ ПОЗИЦИЙ
+    this.app.post('/force-check-positions', async (req, res) => {
+      try {
+        this.logger.info('🔍 Force checking all positions...');
+        
+        const processed = await this.solanaMonitor.forceCheckAllPositions();
+        
+        res.json({
+          success: true,
+          message: `Force-checked all positions`,
+          processed,
+          timestamp: new Date().toISOString()
+        });
+        
+      } catch (error) {
+        this.logger.error('❌ Error in force check positions:', error as Error);
+        res.status(500).json({ error: (error as Error).message });
+      }
+    });
+
+    // 🆕 НОВЫЙ ENDPOINT ДЛЯ ДЕТАЛЬНОЙ СТАТИСТИКИ АГРЕГАЦИИ
+    this.app.get('/aggregation-details', async (req, res) => {
+      try {
+        const solanaStats = this.solanaMonitor.getAggregationStats();
+        const dbStats = await this.database.getPositionAggregationStats();
+        const detectionStats = this.solanaMonitor.getDetectionStats();
+        
+        res.json({
+          solanaMonitor: {
+            ...solanaStats,
+            detectionStats
+          },
+          database: dbStats,
+          integration: {
+            syncStatus: 'active',
+            lastSync: new Date().toISOString(),
+            activePositions: solanaStats.activePositions,
+            totalDetected: detectionStats.totalDetected
+          }
+        });
+        
+      } catch (error) {
+        this.logger.error('❌ Error getting aggregation details:', error as Error);
+        res.status(500).json({ error: 'Failed to get aggregation details' });
+      }
+    });
+
     this.app.use('*', (req, res) => {
       res.status(404).json({ error: 'Endpoint not found' });
     });
+  }
+
+  // 🆕 ОБРАБОТКА ТРАНЗАКЦИИ СО СТАТИСТИКОЙ
+  private async processWebhookTransactionWithStats(txData: HeliusWebhookPayload): Promise<void> {
+    const startTime = Date.now();
+    
+    try {
+      // Определяем тип транзакции
+      if (txData.events?.swap && txData.events.swap.length > 0) {
+        this.processingStats.transactionTypes.swaps++;
+      } else if (txData.tokenTransfers && txData.tokenTransfers.length > 0) {
+        this.processingStats.transactionTypes.transfers++;
+      } else {
+        this.processingStats.transactionTypes.other++;
+      }
+
+      // Базовая обработка
+      await this.processWebhookTransaction(txData);
+      
+      // Обновляем время обработки
+      const processingTime = Date.now() - startTime;
+      this.processingStats.avgProcessingTime = 
+        (this.processingStats.avgProcessingTime + processingTime) / 2;
+        
+    } catch (error) {
+      this.processingStats.errorCount++;
+      throw error;
+    }
   }
 
   private async processWebhookTransaction(txData: HeliusWebhookPayload): Promise<void> {
@@ -262,6 +494,8 @@ export class WebhookServer {
   }
 
   private async processSwapEvent(txData: HeliusWebhookPayload, swapEvent: any): Promise<void> {
+    const startTime = Date.now();
+    
     try {
       const walletAddress = this.extractWalletAddress(swapEvent);
       if (!walletAddress) return;
@@ -272,6 +506,32 @@ export class WebhookServer {
       if (!smartWallet || !smartWallet.isActive) {
         // ✅ ОБЫЧНЫЙ КОШЕЛЕК - передаем в SolanaMonitor для агрегации
         await this.solanaMonitor.processTransaction(txData);
+        this.processingStats.regularTransactions++;
+        
+        // 🆕 ПРОВЕРЯЕМ НА АГРЕГАЦИЮ ПОЗИЦИЙ
+        if (txData.events?.swap && txData.events.swap.length > 0) {
+          const swapInfo = await this.extractBasicSwapInfo(txData, swapEvent);
+          if (swapInfo && swapInfo.amountUSD >= 5000) { // Минимум $5K для проверки
+            const aggregationCheck = await this.solanaMonitor.checkForPositionAggregation(
+              walletAddress,
+              swapInfo.tokenAddress,
+              swapInfo.amountUSD
+            );
+            
+            if (aggregationCheck.isPartOfAggregation) {
+              this.processingStats.positionAggregations++;
+              
+              // Определяем уровень риска
+              if (aggregationCheck.suspicionScore >= 85) {
+                this.processingStats.riskLevels.high++;
+              } else if (aggregationCheck.suspicionScore >= 75) {
+                this.processingStats.riskLevels.medium++;
+              } else {
+                this.processingStats.riskLevels.low++;
+              }
+            }
+          }
+        }
         return;
       }
 
@@ -289,6 +549,7 @@ export class WebhookServer {
 
       if (!validationResult.isValid) {
         this.logger.warn(`🚫 BLOCKED Smart Money tx: ${swapInfo.tokenSymbol} - $${swapInfo.amountUSD} | ${validationResult.reason}`);
+        this.processingStats.filteredTransactions++;
         
         // Отправляем предупреждение в телеграм о заблокированной транзакции
         if (validationResult.riskScore > 80) {
@@ -302,22 +563,155 @@ export class WebhookServer {
             `📝 Factors: <code>${validationResult.suspiciousFactors.join(', ')}</code>\n\n` +
             `<a href="https://solscan.io/token/${swapInfo.tokenAddress}">Token</a> | <a href="https://solscan.io/account/${swapInfo.walletAddress}">Wallet</a>`
           );
+          this.processingStats.alertsSent++;
         }
         return;
       }
 
       // Проверяем стандартные фильтры
       if (!this.shouldProcessSmartMoneySwap(swapInfo, smartWallet)) {
+        this.processingStats.filteredTransactions++;
         return;
       }
 
       await this.saveSmartMoneyTransaction(swapInfo);
       await this.sendSmartMoneyNotification(swapInfo, smartWallet);
+      
+      this.processingStats.smartMoneyTransactions++;
 
-      this.logger.info(`✅ Smart Money swap processed: ${swapInfo.tokenSymbol} - $${swapInfo.amountUSD.toFixed(0)}`);
+      this.logger.info(`✅ Smart Money swap processed: ${swapInfo.tokenSymbol} - $${swapInfo.amountUSD.toFixed(0)} (${Date.now() - startTime}ms)`);
 
     } catch (error) {
       this.logger.error('❌ Error processing swap event:', error as Error);
+      this.processingStats.errorCount++;
+    }
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: ИЗВЛЕЧЕНИЕ БАЗОВОЙ ИНФОРМАЦИИ О СВАПЕ
+  private async extractBasicSwapInfo(txData: HeliusWebhookPayload, swapEvent: any): Promise<{
+    tokenAddress: string;
+    amountUSD: number;
+    swapType: 'buy' | 'sell';
+  } | null> {
+    try {
+      let tokenAddress = '';
+      let amountUSD = 0;
+      let swapType: 'buy' | 'sell' = 'buy';
+
+      if (swapEvent.tokenInputs && swapEvent.tokenOutputs) {
+        const tokenInput = swapEvent.tokenInputs[0];
+        const tokenOutput = swapEvent.tokenOutputs[0];
+        
+        const mainTokens = ['So11111111111111111111111111111111111111112', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'];
+        
+        if (mainTokens.includes(tokenInput.mint)) {
+          swapType = 'buy';
+          tokenAddress = tokenOutput.mint;
+          amountUSD = parseFloat(tokenInput.rawTokenAmount.tokenAmount) / Math.pow(10, tokenInput.rawTokenAmount.decimals);
+        } else {
+          swapType = 'sell';
+          tokenAddress = tokenInput.mint;
+          amountUSD = parseFloat(tokenOutput.rawTokenAmount.tokenAmount) / Math.pow(10, tokenOutput.rawTokenAmount.decimals);
+        }
+      } else if (swapEvent.nativeInput && swapEvent.tokenOutputs) {
+        swapType = 'buy';
+        tokenAddress = swapEvent.tokenOutputs[0].mint;
+        amountUSD = parseFloat(swapEvent.nativeInput.amount) / 1e9;
+      } else if (swapEvent.tokenInputs && swapEvent.nativeOutput) {
+        swapType = 'sell';
+        tokenAddress = swapEvent.tokenInputs[0].mint;
+        amountUSD = parseFloat(swapEvent.nativeOutput.amount) / 1e9;
+      }
+
+      if (!tokenAddress || amountUSD === 0) {
+        return null;
+      }
+
+      return { tokenAddress, amountUSD, swapType };
+      
+    } catch (error) {
+      this.logger.error('Error extracting basic swap info:', error);
+      return null;
+    }
+  }
+
+  // 🆕 МОНИТОРИНГ ПРОИЗВОДИТЕЛЬНОСТИ
+  private startPerformanceMonitoring(): void {
+    this.performanceInterval = setInterval(() => {
+      this.updatePerformanceMetrics();
+    }, 60000); // Каждую минуту
+
+    this.logger.info('📊 Performance monitoring started');
+  }
+
+  private updatePerformanceMetrics(): void {
+    // Обновляем счетчики запросов
+    const now = Date.now();
+    if (now > this.requestCounters.lastMinuteReset) {
+      this.requestCounters.lastMinuteRequests = 0;
+      this.requestCounters.lastMinuteErrors = 0;
+      this.requestCounters.lastMinuteReset = now + 60000;
+    }
+  }
+
+  private getPerformanceMetrics(): PerformanceMetrics {
+    const memoryUsage = process.memoryUsage();
+    const totalCacheSize = this.tokenInfoCache.size + this.topHoldersCache.size + 
+                          this.relatedWalletsCache.size + this.recentTxCache.size;
+    
+    return {
+      memoryUsage,
+      cpuUsage: process.cpuUsage().user / 1000000, // Примерное значение CPU
+      activeConnections: 0, // Можно расширить при необходимости
+      requestsPerMinute: this.requestCounters.lastMinuteRequests,
+      errorsPerMinute: this.requestCounters.lastMinuteErrors,
+      cacheHitRate: totalCacheSize > 0 ? 
+        (this.processingStats.totalTransactionsProcessed / totalCacheSize * 100) : 0
+    };
+  }
+
+  // 🆕 ПЕРИОДИЧЕСКАЯ ОТПРАВКА СТАТИСТИКИ
+  private startStatsReporting(): void {
+    // Отправляем статистику каждые 6 часов
+    setInterval(async () => {
+      await this.sendPeriodicStatsReport();
+    }, 6 * 60 * 60 * 1000); // 6 часов
+
+    this.logger.info('📈 Stats reporting started: every 6 hours');
+  }
+
+  private async sendPeriodicStatsReport(): Promise<void> {
+    try {
+      const solanaStats = this.solanaMonitor.getAggregationStats();
+      const dbStats = await this.database.getPositionAggregationStats();
+      const detectionStats = this.solanaMonitor.getDetectionStats();
+      
+      await this.telegramNotifier.sendCycleLog(
+        `📊 <b>Periodic Stats Report</b>\n\n` +
+        `🔄 <b>Webhook Processing:</b>\n` +
+        `• Total processed: <code>${this.processingStats.totalTransactionsProcessed}</code>\n` +
+        `• Smart Money txs: <code>${this.processingStats.smartMoneyTransactions}</code>\n` +
+        `• Regular txs: <code>${this.processingStats.regularTransactions}</code>\n` +
+        `• Filtered: <code>${this.processingStats.filteredTransactions}</code>\n` +
+        `• Errors: <code>${this.processingStats.errorCount}</code>\n\n` +
+        `🎯 <b>Position Aggregation:</b>\n` +
+        `• Active positions: <code>${solanaStats.activePositions}</code>\n` +
+        `• Total detected: <code>${detectionStats.totalDetected}</code>\n` +
+        `• Alerts sent: <code>${detectionStats.alertsSent}</code>\n` +
+        `• High risk: <code>${this.processingStats.riskLevels.high}</code>\n` +
+        `• Cache hit rate: <code>${solanaStats.cacheStats?.cacheHitRate || '0%'}</code>\n\n` +
+        `💾 <b>Database:</b>\n` +
+        `• Saved aggregations: <code>${dbStats.totalPositions}</code>\n` +
+        `• High suspicion: <code>${dbStats.highSuspicionPositions}</code>\n` +
+        `• Unprocessed: <code>${dbStats.unprocessedPositions}</code>\n\n` +
+        `⚡ <b>Performance:</b>\n` +
+        `• Avg processing: <code>${this.processingStats.avgProcessingTime.toFixed(0)}ms</code>\n` +
+        `• Requests/min: <code>${this.requestCounters.lastMinuteRequests}</code>\n` +
+        `• Memory: <code>${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(0)}MB</code>`
+      );
+      
+    } catch (error) {
+      this.logger.error('Error sending periodic stats report:', error);
     }
   }
 
@@ -850,6 +1244,7 @@ export class WebhookServer {
   private async sendSmartMoneyNotification(swapInfo: SmartMoneySwap, smartWallet: SmartMoneyWallet): Promise<void> {
     try {
       await this.telegramNotifier.sendSmartMoneySwap(swapInfo);
+      this.processingStats.alertsSent++;
     } catch (error) {
       this.logger.error('Error sending Smart Money notification:', error as Error);
     }
@@ -1015,6 +1410,7 @@ export class WebhookServer {
       this.logger.debug(`  - Recent TX: ${txExpired.length}`);
     }
   }
+
   private formatNumber(num: number): string {
     if (num >= 1_000_000) {
       return `${(num / 1_000_000).toFixed(1)}M`;
@@ -1029,11 +1425,12 @@ export class WebhookServer {
     return new Promise((resolve, reject) => {
       try {
         this.server = this.app.listen(this.port, '0.0.0.0', () => {
-          this.logger.info(`🌐 Background Worker webhook server started on port ${this.port} (WITH SMART MONEY FILTERS + POSITION AGGREGATION)`);
+          this.logger.info(`🌐 Background Worker webhook server started on port ${this.port} (WITH SMART MONEY FILTERS + POSITION AGGREGATION + SOLANA MONITOR INTEGRATION)`);
           this.logger.info(`📡 Webhook endpoint ready: http://localhost:${this.port}/webhook`);
           this.logger.info(`💊 Health check: http://localhost:${this.port}/health`);
           this.logger.info(`🚨 Smart Money filters: ENABLED`);
           this.logger.info(`🎯 Position aggregation: ENABLED`);
+          this.logger.info(`🔗 Solana Monitor integration: ENABLED`);
           resolve();
         });
 
@@ -1057,6 +1454,13 @@ export class WebhookServer {
       this.logger.info('🧹 Cache cleanup stopped');
     }
 
+    // 🆕 Останавливаем мониторинг производительности
+    if (this.performanceInterval) {
+      clearInterval(this.performanceInterval);
+      this.performanceInterval = null;
+      this.logger.info('📊 Performance monitoring stopped');
+    }
+
     if (this.server) {
       return new Promise((resolve) => {
         this.server.close(() => {
@@ -1078,8 +1482,12 @@ export class WebhookServer {
         tokenInfoCache: this.tokenInfoCache.size,
         holdersCache: this.topHoldersCache.size,
         relatedWalletsCache: this.relatedWalletsCache.size,
-        positionAggregation: 'enabled'
-      }
+        positionAggregation: 'enabled',
+        solanaMonitorIntegration: 'enabled' // 🆕 НОВАЯ ФИЧА
+      },
+      // 🆕 РАСШИРЕННАЯ СТАТИСТИКА
+      processing: this.processingStats,
+      performance: this.getPerformanceMetrics()
     };
   }
 }
