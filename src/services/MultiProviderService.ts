@@ -1,811 +1,1045 @@
-// src/services/MultiProviderService.ts - МОЩНАЯ МУЛЬТИПРОВАЙДЕР СИСТЕМА
+// src/services/MultiProviderService.ts - МОЩНАЯ СИСТЕМА БАЛАНСИРОВКИ ПРОВАЙДЕРОВ
 import { Logger } from '../utils/Logger';
+import {
+  ProviderConfig,
+  APIResponse,
+  ProviderStats,
+  LoadBalancingResult,
+  RetryConfig,
+  HealthCheckResult,
+  CacheEntry,
+  CacheConfig,
+  MultiProviderMetrics
+} from '../types';
 
-// 🌐 ТИПЫ ПРОВАЙДЕРОВ (без слабого Helius)
-type ProviderType = 'quicknode' | 'alchemy' | 'getblock' | 'moralis' | 'ankr';
-
-interface APIProvider {
-  name: string;
-  type: ProviderType;
-  baseUrl: string;
-  apiKey: string;
-  
-  // Лимиты
-  requestsPerMinute: number;
-  requestsPerDay: number;
-  requestsPerMonth: number;
-  
-  // Текущее использование
-  currentMinuteRequests: number;
-  currentDayRequests: number;
-  currentMonthRequests: number;
-  
-  // Время сброса счетчиков
-  minuteReset: number;
-  dayReset: number;
-  monthReset: number;
-  
-  // Статистика
-  totalRequests: number;
-  successfulRequests: number;
-  failedRequests: number;
-  avgResponseTime: number;
-  
-  // Состояние
-  isHealthy: boolean;
-  lastError?: string;
-  lastErrorTime?: number;
-  
-  // Специализация
-  specialties: string[];
-  priority: number; // Приоритет провайдера (1-5, где 5 = самый надежный)
+// Интерфейс для RPC ответа
+interface RPCResponse {
+  jsonrpc: string;
+  id: number;
+  result?: any;
+  error?: {
+    code: number;
+    message: string;
+    data?: any;
+  };
 }
 
-interface RequestOptions {
-  method: string;
-  params?: any[];
-  body?: any;
-  timeout?: number;
-  retries?: number;
-  preferredProvider?: ProviderType;
-  requiredSpecialty?: string;
-  maxAttempts?: number;
-}
-
-interface ProviderResponse {
-  success: boolean;
-  data?: any;
-  error?: string;
-  provider: string;
-  responseTime: number;
-  fromCache?: boolean;
-}
-
+/**
+ * Мощная система управления множественными RPC провайдерами
+ * Поддерживает QuickNode, Alchemy, Helius, GenesysGo, Triton
+ * Автоматическая балансировка нагрузки, failover, кеширование
+ */
 export class MultiProviderService {
-  private providers: Map<ProviderType, APIProvider> = new Map();
   private logger: Logger;
+  private providers: Map<string, ProviderConfig> = new Map();
+  private providerStats: Map<string, ProviderStats> = new Map();
+  private cache: Map<string, CacheEntry> = new Map();
+  
+  // Конфигурация
+  private retryConfig: RetryConfig;
+  private cacheConfig: CacheConfig;
+  
+  // Мониторинг и метрики
+  private metrics: MultiProviderMetrics;
   private healthCheckInterval: NodeJS.Timeout | null = null;
-  private responseCache: Map<string, { data: any; timestamp: number }> = new Map();
-  private readonly CACHE_TTL = 10000; // 10 секунд кеш
+  private cacheCleanupInterval: NodeJS.Timeout | null = null;
+  private statsUpdateInterval: NodeJS.Timeout | null = null;
+  
+  // Состояние системы
+  private primaryProvider: string | null = null;
+  private isShuttingDown: boolean = false;
+  private requestQueue: Array<() => Promise<any>> = [];
+  private processingQueue: boolean = false;
 
   constructor() {
     this.logger = Logger.getInstance();
+    
+    // Инициализация конфигураций
+    this.retryConfig = {
+      maxAttempts: 3,
+      baseDelay: 1000,
+      maxDelay: 10000,
+      backoffMultiplier: 2,
+      retryOnErrors: ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'],
+      retryOnTimeout: true,
+      retryOnRateLimit: true
+    };
+    
+    this.cacheConfig = {
+      enabled: true,
+      defaultTTL: 300, // 5 минут
+      maxSize: 10000,
+      cleanupInterval: 60, // 1 минута
+      methodTTL: {
+        'getAccountInfo': 30,
+        'getSignaturesForAddress': 10,
+        'getTransaction': 3600, // 1 час для завершенных транзакций
+        'getTokenAccountsByOwner': 60,
+        'getTokenMetadata': 86400, // 24 часа для метаданных
+        'getBalance': 30
+      }
+    };
+    
+    this.metrics = {
+      totalRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      avgResponseTime: 0,
+      totalProviders: 0,
+      healthyProviders: 0,
+      primaryProvider: '',
+      cacheHits: 0,
+      cacheMisses: 0,
+      cacheHitRate: 0,
+      cacheSize: 0,
+      failovers: 0,
+      providerDistribution: {}
+    };
+    
+    // Инициализация провайдеров
     this.initializeProviders();
-    this.startHealthCheck();
-    this.startUsageReset();
-    this.startCacheCleanup();
+    
+    // Запуск фоновых процессов
+    this.startBackgroundTasks();
+    
+    this.logger.info('🚀 MultiProviderService initialized with advanced load balancing');
   }
 
-  // 🏗️ ИНИЦИАЛИЗАЦИЯ МОЩНЫХ ПРОВАЙДЕРОВ
+  /**
+   * Инициализация всех доступных провайдеров
+   */
   private initializeProviders(): void {
-    const providerConfigs: Partial<APIProvider>[] = [
+    const providerConfigs: ProviderConfig[] = [
+      // QuickNode - Основной провайдер
       {
-        name: 'QuickNode Pro',
+        name: 'QuickNode-Primary',
         type: 'quicknode',
         baseUrl: process.env.QUICKNODE_HTTP_URL || '',
         apiKey: process.env.QUICKNODE_API_KEY || '',
-        requestsPerMinute: 50,       // Увеличено для стабильности
-        requestsPerDay: 15000,       // Консервативно
-        requestsPerMonth: 12000000,  // 12M кредитов
-        specialties: ['rpc', 'transactions', 'accounts', 'fast'],
-        priority: 5 // Топ приоритет
+        requestsPerMinute: 60,
+        requestsPerDay: 20000,
+        requestsPerMonth: 15000000,
+        priority: 5, // Высший приоритет
+        reliability: 95,
+        specialties: ['rpc', 'fast', 'reliable', 'webhooks'],
+        timeout: 8000,
+        retryAttempts: 2,
+        retryDelay: 1000
       },
+      
+      // Alchemy - Мощный резерв
       {
-        name: 'Alchemy Enhanced',
+        name: 'Alchemy-Enhanced',
         type: 'alchemy',
         baseUrl: process.env.ALCHEMY_HTTP_URL || 'https://solana-mainnet.g.alchemy.com/v2',
         apiKey: process.env.ALCHEMY_API_KEY || '',
-        requestsPerMinute: 120,      // Alchemy очень щедрый
-        requestsPerDay: 400000,      // 400M compute units
-        requestsPerMonth: 12000000,
+        requestsPerMinute: 150,
+        requestsPerDay: 500000,
+        requestsPerMonth: 20000000,
+        priority: 5, // Также высший приоритет
+        reliability: 98,
         specialties: ['rpc', 'enhanced', 'analytics', 'reliable'],
-        priority: 5 // Топ приоритет
+        timeout: 10000,
+        retryAttempts: 3,
+        retryDelay: 500
       },
+      
+      // Helius - Специализированный
       {
-        name: 'GetBlock Archive',
-        type: 'getblock',
-        baseUrl: 'https://go.getblock.io',
-        apiKey: process.env.GETBLOCK_API_KEY || '',
-        requestsPerMinute: 40,
-        requestsPerDay: 50000,       // Увеличено
-        requestsPerMonth: 1500000,
-        specialties: ['rpc', 'archive', 'historical'],
-        priority: 4 // Хороший архивный провайдер
+        name: 'Helius-Specialized',
+        type: 'helius',
+        baseUrl: 'https://mainnet.helius-rpc.com',
+        apiKey: process.env.HELIUS_API_KEY || '',
+        requestsPerMinute: 100,
+        requestsPerDay: 200000,
+        requestsPerMonth: 8000000,
+        priority: 4,
+        reliability: 90,
+        specialties: ['rpc', 'metadata', 'enhanced', 'analytics'],
+        timeout: 12000,
+        retryAttempts: 2,
+        retryDelay: 1500
       },
+      
+      // GenesysGo - Резервный
       {
-        name: 'Moralis Data',
-        type: 'moralis',
-        baseUrl: 'https://solana-gateway.moralis.io',
-        apiKey: process.env.MORALIS_API_KEY || '',
-        requestsPerMinute: 35,
-        requestsPerDay: 120000,      // Увеличено
-        requestsPerMonth: 3500000,
-        specialties: ['tokens', 'balances', 'prices', 'metadata'],
-        priority: 4 // Хорош для данных о токенах
+        name: 'GenesysGo-Backup',
+        type: 'genesysgo',
+        baseUrl: 'https://ssc-dao.genesysgo.net',
+        apiKey: process.env.GENESYSGO_API_KEY || '',
+        requestsPerMinute: 80,
+        requestsPerDay: 100000,
+        requestsPerMonth: 5000000,
+        priority: 3,
+        reliability: 85,
+        specialties: ['rpc', 'backup'],
+        timeout: 15000,
+        retryAttempts: 1,
+        retryDelay: 2000
       },
+      
+      // Triton - Дополнительный
       {
-        name: 'Ankr Fast',
-        type: 'ankr',
-        baseUrl: 'https://rpc.ankr.com/solana',
-        apiKey: process.env.ANKR_API_KEY || '',
-        requestsPerMinute: 60,
-        requestsPerDay: 600000,      // Очень щедрый
-        requestsPerMonth: 18000000,
-        specialties: ['rpc', 'historical', 'fast'],
-        priority: 4 // Быстрый и надежный
+        name: 'Triton-Extra',
+        type: 'triton',
+        baseUrl: 'https://triton.one/rpc',
+        apiKey: process.env.TRITON_API_KEY || '',
+        requestsPerMinute: 50,
+        requestsPerDay: 50000,
+        requestsPerMonth: 2000000,
+        priority: 3,
+        reliability: 80,
+        specialties: ['rpc', 'extra'],
+        timeout: 20000,
+        retryAttempts: 1,
+        retryDelay: 3000
       }
     ];
 
+    // Регистрируем только провайдеров с API ключами
     for (const config of providerConfigs) {
       if (config.apiKey && config.baseUrl) {
-        const provider: APIProvider = {
-          name: config.name!,
-          type: config.type!,
-          baseUrl: config.baseUrl!,
-          apiKey: config.apiKey,
-          requestsPerMinute: config.requestsPerMinute!,
-          requestsPerDay: config.requestsPerDay!,
-          requestsPerMonth: config.requestsPerMonth!,
-          currentMinuteRequests: 0,
-          currentDayRequests: 0,
-          currentMonthRequests: 0,
-          minuteReset: Date.now() + 60000,
-          dayReset: Date.now() + 86400000,
-          monthReset: Date.now() + 30 * 86400000,
-          totalRequests: 0,
-          successfulRequests: 0,
-          failedRequests: 0,
-          avgResponseTime: 0,
-          isHealthy: true,
-          specialties: config.specialties!,
-          priority: config.priority!
-        };
-
-        this.providers.set(config.type!, provider);
-        this.logger.info(`🚀 Strong provider initialized: ${config.name} (${config.type}) - Priority: ${config.priority}`);
+        this.addProvider(config);
+        this.logger.info(`✅ Provider registered: ${config.name} (Priority: ${config.priority})`);
       } else {
         this.logger.warn(`⚠️ Skipping ${config.name}: missing API key or URL`);
       }
     }
 
-    this.logger.info(`💪 MultiProvider initialized with ${this.providers.size} STRONG providers`);
+    // Устанавливаем основной провайдер
+    this.selectPrimaryProvider();
+    this.updateMetrics();
   }
 
-  // 🚀 ГЛАВНЫЙ МЕТОД - УМНЫЙ ЗАПРОС К ЛУЧШЕМУ ПРОВАЙДЕРУ
-  async makeRequest(options: RequestOptions): Promise<ProviderResponse> {
-    const startTime = Date.now();
-    const cacheKey = this.generateCacheKey(options);
+  /**
+   * Добавление нового провайдера
+   */
+  public addProvider(config: ProviderConfig): void {
+    this.providers.set(config.name, config);
+    
+    // Инициализация статистики
+    this.providerStats.set(config.name, {
+      name: config.name,
+      type: config.type,
+      requestCount: 0,
+      errorCount: 0,
+      successRate: 100,
+      avgResponseTime: 0,
+      isHealthy: true,
+      priority: config.priority,
+      currentMinuteRequests: 0,
+      currentDayRequests: 0,
+      currentMonthRequests: 0,
+      minuteUsage: 0,
+      dayUsage: 0,
+      monthUsage: 0,
+      consecutiveErrors: 0,
+      minResponseTime: Infinity,
+      maxResponseTime: 0,
+      responseTimeHistory: []
+    });
+    
+    this.metrics.totalProviders++;
+    this.metrics.providerDistribution[config.name] = 0;
+  }
 
-    // Проверяем кеш для GET-подобных операций
-    if (this.isCacheable(options.method)) {
-      const cached = this.getFromCache(cacheKey);
-      if (cached) {
+  /**
+   * 🚀 ГЛАВНЫЙ МЕТОД - УМНЫЙ ЗАПРОС С БАЛАНСИРОВКОЙ
+   */
+  async makeRequest<T = any>(
+    method: string, 
+    params: any[] = [], 
+    options: {
+      preferredProvider?: string;
+      requiredSpecialty?: string;
+      priority?: 'low' | 'normal' | 'high' | 'critical';
+      timeout?: number;
+      maxRetries?: number;
+      useCache?: boolean;
+    } = {}
+  ): Promise<APIResponse<T>> {
+    const startTime = Date.now();
+    const requestId = this.generateRequestId();
+    
+    try {
+      this.metrics.totalRequests++;
+      
+      // Проверяем кеш
+      if (options.useCache !== false && this.cacheConfig.enabled) {
+        const cached = this.getFromCache(method, params);
+        if (cached) {
+          this.metrics.cacheHits++;
+          this.updateCacheMetrics();
+          return {
+            success: true,
+            data: cached.data as T,
+            provider: cached.provider,
+            responseTime: Date.now() - startTime,
+            retryCount: 0,
+            fromCache: true
+          };
+        }
+        this.metrics.cacheMisses++;
+      }
+
+      // Выбираем лучший провайдер
+      const loadBalancingResult = await this.selectBestProvider(options);
+      if (!loadBalancingResult) {
+        throw new Error('No healthy providers available');
+      }
+
+      // Выполняем запрос с retry логикой
+      const response = await this.executeRequestWithRetry<T>(
+        loadBalancingResult.provider,
+        method,
+        params,
+        options,
+        requestId
+      );
+
+      // Кешируем успешный результат
+      if (response.success && options.useCache !== false && this.cacheConfig.enabled) {
+        this.setToCache(method, params, response.data, loadBalancingResult.provider.name);
+      }
+
+      // Обновляем метрики
+      this.updateProviderMetrics(loadBalancingResult.provider.name, true, response.responseTime);
+      this.metrics.successfulRequests++;
+      this.updateRequestMetrics(Date.now() - startTime);
+
+      return response;
+
+    } catch (error) {
+      this.metrics.failedRequests++;
+      this.logger.error(`❌ Request failed: ${method}`, error);
+      
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        provider: 'error',
+        responseTime: Date.now() - startTime,
+        retryCount: this.retryConfig.maxAttempts
+      };
+    }
+  }
+
+  /**
+   * 🎯 УМНЫЙ ВЫБОР ПРОВАЙДЕРА С БАЛАНСИРОВКОЙ
+   */
+  private async selectBestProvider(options: {
+    preferredProvider?: string;
+    requiredSpecialty?: string;
+    priority?: string;
+  }): Promise<LoadBalancingResult | null> {
+    const availableProviders = Array.from(this.providers.values()).filter(provider => {
+      const stats = this.providerStats.get(provider.name);
+      return stats?.isHealthy && this.canMakeRequest(provider.name);
+    });
+
+    if (availableProviders.length === 0) {
+      this.logger.error('💀 No healthy providers available!');
+      return null;
+    }
+
+    // Предпочитаемый провайдер
+    if (options.preferredProvider) {
+      const preferred = availableProviders.find(p => p.name === options.preferredProvider);
+      if (preferred) {
         return {
-          success: true,
-          data: cached,
-          provider: 'cache',
-          responseTime: 1,
-          fromCache: true
+          provider: preferred,
+          fallbackUsed: false,
+          totalProviders: this.providers.size,
+          healthyProviders: availableProviders.length,
+          responseTime: 0,
+          retries: 0
         };
       }
     }
 
-    const maxAttempts = options.maxAttempts || 4;
-    let lastError: string = '';
-    const triedProviders = new Set<ProviderType>();
-
-    // Пытаемся до maxAttempts раз
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const provider = this.selectBestProvider(options, triedProviders);
-      
-      if (!provider) {
-        break;
-      }
-
-      triedProviders.add(provider.type);
-      const result = await this.executeRequest(provider, options);
-      
-      if (result.success) {
-        // Кешируем успешный результат
-        if (this.isCacheable(options.method)) {
-          this.setToCache(cacheKey, result.data);
-        }
-        
-        this.logger.info(`✅ Success with ${provider.name} (attempt ${attempt + 1})`);
-        return result;
-      }
-
-      lastError = result.error || 'Unknown error';
-      this.logger.warn(`❌ ${provider.name} failed (attempt ${attempt + 1}): ${lastError}`);
-    }
-
-    // Все провайдеры не сработали
-    return {
-      success: false,
-      error: `All ${triedProviders.size} providers failed. Last error: ${lastError}`,
-      provider: 'all-failed',
-      responseTime: Date.now() - startTime
-    };
-  }
-
-  // 🎯 УМНЫЙ ВЫБОР ЛУЧШЕГО ПРОВАЙДЕРА
-  private selectBestProvider(options: RequestOptions, excludeTypes: Set<ProviderType>): APIProvider | null {
-    const availableProviders = Array.from(this.providers.values()).filter(p => 
-      !excludeTypes.has(p.type) &&
-      p.isHealthy && 
-      this.canMakeRequest(p) &&
-      this.supportsRequest(p, options)
-    );
-
-    if (availableProviders.length === 0) {
-      return null;
-    }
-
-    // Предпочитаемый провайдер (если доступен)
-    if (options.preferredProvider) {
-      const preferred = availableProviders.find(p => p.type === options.preferredProvider);
-      if (preferred) {
-        this.logger.info(`🎯 Using preferred provider: ${preferred.name}`);
-        return preferred;
-      }
-    }
-
-    // Провайдер со специализацией
+    // Фильтрация по специализации
     if (options.requiredSpecialty) {
       const specialized = availableProviders.filter(p => 
         p.specialties.includes(options.requiredSpecialty!)
       );
       if (specialized.length > 0) {
-        return this.selectByScore(specialized);
+        const best = this.selectByScore(specialized);
+        return {
+          provider: best,
+          fallbackUsed: false,
+          totalProviders: this.providers.size,
+          healthyProviders: availableProviders.length,
+          responseTime: 0,
+          retries: 0
+        };
       }
     }
 
-    // Лучший по общему скору
-    return this.selectByScore(availableProviders);
+    // Выбор по скору
+    const best = this.selectByScore(availableProviders);
+    return {
+      provider: best,
+      fallbackUsed: availableProviders.length < this.providers.size,
+      totalProviders: this.providers.size,
+      healthyProviders: availableProviders.length,
+      responseTime: 0,
+      retries: 0
+    };
   }
 
-  // 📊 РАСЧЕТ СКОРА ПРОВАЙДЕРА (улучшенный алгоритм)
-  private selectByScore(providers: APIProvider[]): APIProvider {
-    const scored = providers.map(p => ({
-      provider: p,
-      score: this.calculateAdvancedScore(p)
-    }));
+  /**
+   * 📊 РАСЧЕТ СКОРА ПРОВАЙДЕРА (УЛУЧШЕННЫЙ АЛГОРИТМ)
+   */
+  private selectByScore(providers: ProviderConfig[]): ProviderConfig {
+    const scored = providers.map(provider => {
+      const stats = this.providerStats.get(provider.name)!;
+      let score = provider.priority * 20; // Базовый скор (до 100)
 
-    // Сортируем по score (больше = лучше)
+      // Штрафы за использование лимитов
+      score -= stats.minuteUsage * 0.3;
+      score -= stats.dayUsage * 0.2;
+      score -= stats.monthUsage * 0.1;
+
+      // Бонус за надежность
+      score += stats.successRate * 0.3;
+
+      // Штраф за медленность
+      if (stats.avgResponseTime > 0) {
+        const speedPenalty = Math.min(stats.avgResponseTime / 1000 * 5, 20);
+        score -= speedPenalty;
+      }
+
+      // Штраф за последовательные ошибки
+      score -= stats.consecutiveErrors * 10;
+
+      // Бонус за стабильность
+      if (stats.responseTimeHistory.length > 10) {
+        const variance = this.calculateVariance(stats.responseTimeHistory);
+        const stability = Math.max(0, 100 - variance / 100);
+        score += stability * 0.1;
+      }
+
+      return { provider, score: Math.max(score, 0) };
+    });
+
     scored.sort((a, b) => b.score - a.score);
-    
     const winner = scored[0].provider;
-    this.logger.info(`🏆 Selected provider: ${winner.name} (score: ${scored[0].score.toFixed(1)})`);
     
+    this.logger.debug(`🏆 Selected provider: ${winner.name} (score: ${scored[0].score.toFixed(1)})`);
     return winner;
   }
 
-  private calculateAdvancedScore(provider: APIProvider): number {
-    let score = provider.priority * 20; // Базовый скор на основе приоритета (до 100)
-
-    // Штраф за использование лимитов (более жесткий)
-    const minuteUsage = provider.currentMinuteRequests / provider.requestsPerMinute;
-    const dayUsage = provider.currentDayRequests / provider.requestsPerDay;
+  /**
+   * 🔄 ВЫПОЛНЕНИЕ ЗАПРОСА С RETRY ЛОГИКОЙ
+   */
+  private async executeRequestWithRetry<T>(
+    provider: ProviderConfig,
+    method: string,
+    params: any[],
+    options: any,
+    requestId: string
+  ): Promise<APIResponse<T>> {
+    let lastError: Error | null = null;
     
-    score -= minuteUsage * 40; // До -40 за минутный лимит
-    score -= dayUsage * 30;    // До -30 за дневной лимит
-
-    // Бонус за надежность
-    if (provider.totalRequests > 10) {
-      const successRate = provider.successfulRequests / provider.totalRequests;
-      score += successRate * 30; // До +30 за высокую успешность
+    for (let attempt = 0; attempt < this.retryConfig.maxAttempts; attempt++) {
+      const startTime = Date.now();
       
-      // Дополнительный бонус за стабильность
-      if (successRate > 0.95) {
-        score += 15; // Бонус за > 95% успешность
+      try {
+        const response = await this.executeRequest(provider, method, params, options.timeout || provider.timeout);
+        const responseTime = Date.now() - startTime;
+        
+        return {
+          success: true,
+          data: response as T,
+          provider: provider.name,
+          responseTime,
+          retryCount: attempt
+        };
+
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('Unknown error');
+        const responseTime = Date.now() - startTime;
+        
+        this.updateProviderMetrics(provider.name, false, responseTime);
+        
+        // Проверяем, нужно ли повторить
+        if (!this.shouldRetry(lastError, attempt)) {
+          break;
+        }
+
+        // Задержка перед повтором
+        if (attempt < this.retryConfig.maxAttempts - 1) {
+          const delay = Math.min(
+            this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffMultiplier, attempt),
+            this.retryConfig.maxDelay
+          );
+          
+          this.logger.warn(`⏳ Retrying ${provider.name} in ${delay}ms (attempt ${attempt + 1})`);
+          await this.sleep(delay);
+        }
       }
     }
 
-    // Штраф за медленность (более строгий)
-    if (provider.avgResponseTime > 0) {
-      const speedPenalty = Math.min(provider.avgResponseTime / 500 * 10, 25);
-      score -= speedPenalty; // До -25 за медленность
-    }
-
-    // Серьезный штраф за недавние ошибки
-    if (provider.lastErrorTime) {
-      const timeSinceError = Date.now() - provider.lastErrorTime;
-      if (timeSinceError < 30000) { // Последние 30 секунд
-        score -= 40;
-      } else if (timeSinceError < 120000) { // Последние 2 минуты
-        score -= 20;
-      }
-    }
-
-    return Math.max(score, 0);
+    throw lastError || new Error('All retry attempts failed');
   }
 
-  // 🌐 ВЫПОЛНЕНИЕ ЗАПРОСА (улучшенное)
-  private async executeRequest(provider: APIProvider, options: RequestOptions): Promise<ProviderResponse> {
-    const startTime = Date.now();
+  /**
+   * 🌐 ВЫПОЛНЕНИЕ HTTP ЗАПРОСА
+   */
+  private async executeRequest(
+    provider: ProviderConfig,
+    method: string,
+    params: any[],
+    timeout: number
+  ): Promise<any> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
-      // Увеличиваем счетчики
-      this.incrementProviderUsage(provider);
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method,
+        params
+      });
 
-      // Формируем запрос
-      const requestConfig = this.buildRequestConfig(provider, options);
-      
-      // Делаем запрос с таймаутом
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), options.timeout || 8000);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Smart-Money-MultiProvider/1.0'
+      };
 
-      const response = await fetch(requestConfig.url, {
-        method: requestConfig.method,
-        headers: requestConfig.headers,
-        body: requestConfig.body,
+      // Добавляем авторизацию в зависимости от типа провайдера
+      const url = this.buildProviderUrl(provider);
+      this.addAuthHeaders(provider, headers);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body,
         signal: controller.signal
       });
 
       clearTimeout(timeoutId);
-      const responseTime = Date.now() - startTime;
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const data: any = await response.json();
-      
+      const data = await response.json() as RPCResponse;
+
       // Проверяем на RPC ошибки
-      if (data && typeof data === 'object' && data.error) {
-        const errorMsg = data.error.message || 
-                        (typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
-        throw new Error(`RPC Error: ${errorMsg}`);
+      if (data.error) {
+        throw new Error(`RPC Error: ${data.error.message || JSON.stringify(data.error)}`);
       }
 
-      const normalizedData = this.normalizeResponse(provider.type, data, options);
+      // Отслеживаем rate limits
+      this.trackRateLimits(provider.name, response);
 
-      // Обновляем статистику
-      this.updateProviderStats(provider, true, responseTime);
-
-      return {
-        success: true,
-        data: normalizedData,
-        provider: provider.name,
-        responseTime
-      };
+      return data.result;
 
     } catch (error) {
-      const responseTime = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-      // Обновляем статистику
-      this.updateProviderStats(provider, false, responseTime);
-      provider.lastError = errorMessage;
-      provider.lastErrorTime = Date.now();
-
-      // Временно помечаем как нездоровый при критических ошибках
-      if (errorMessage.includes('timeout') || 
-          errorMessage.includes('500') || 
-          errorMessage.includes('502') ||
-          errorMessage.includes('503')) {
-        provider.isHealthy = false;
-        this.logger.warn(`🚨 Temporarily marking ${provider.name} as unhealthy`);
-        
-        // Восстанавливаем через 2 минуты
-        setTimeout(() => {
-          provider.isHealthy = true;
-          this.logger.info(`💚 Restored ${provider.name} to healthy state`);
-        }, 120000);
+      clearTimeout(timeoutId);
+      
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Request timeout');
       }
-
-      return {
-        success: false,
-        error: errorMessage,
-        provider: provider.name,
-        responseTime
-      };
+      
+      throw error;
     }
   }
 
-  // 🔧 ПОСТРОЕНИЕ КОНФИГУРАЦИИ ЗАПРОСА
-  private buildRequestConfig(provider: APIProvider, options: RequestOptions): {
-    url: string;
-    method: string;
-    headers: Record<string, string>;
-    body?: string;
-  } {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'User-Agent': 'Solana-Smart-Money-Bot/3.2.0',
-      'Accept': 'application/json'
-    };
-
-    let url = provider.baseUrl;
-    let body: string | undefined;
-
+  /**
+   * 🔗 ПОСТРОЕНИЕ URL ПРОВАЙДЕРА
+   */
+  private buildProviderUrl(provider: ProviderConfig): string {
     switch (provider.type) {
       case 'quicknode':
-        // QuickNode с API ключом в URL
-        if (!provider.baseUrl.includes(provider.apiKey)) {
-          url = provider.baseUrl.replace('https://', `https://${provider.apiKey}@`);
-        }
-        body = JSON.stringify({
-          jsonrpc: '2.0',
-          id: Date.now(),
-          method: options.method,
-          params: options.params || []
-        });
-        break;
-
+        return provider.baseUrl;
+      
       case 'alchemy':
-        // Alchemy с ключом в URL
-        if (!url.includes(provider.apiKey)) {
-          url = `${provider.baseUrl}/${provider.apiKey}`;
-        }
-        body = JSON.stringify({
-          jsonrpc: '2.0',
-          id: Date.now(),
-          method: options.method,
-          params: options.params || []
-        });
-        break;
+        return provider.baseUrl.includes(provider.apiKey) ? 
+          provider.baseUrl : 
+          `${provider.baseUrl}/${provider.apiKey}`;
+      
+      case 'helius':
+        return `${provider.baseUrl}/?api-key=${provider.apiKey}`;
+      
+      case 'genesysgo':
+      case 'triton':
+      default:
+        return provider.baseUrl;
+    }
+  }
 
-      case 'getblock':
-        // GetBlock с API ключом в URL
-        url = `${provider.baseUrl}/${provider.apiKey}/`;
-        body = JSON.stringify({
-          jsonrpc: '2.0',
-          id: Date.now(),
-          method: options.method,
-          params: options.params || []
-        });
-        break;
-
-      case 'moralis':
-        // Moralis с заголовком
-        headers['X-API-Key'] = provider.apiKey;
-        if (options.method.includes('Token') || options.method.includes('Balance')) {
-          // REST API для токенов
-          url += this.mapMoralisEndpoint(options.method, options.params);
-        } else {
-          // RPC для остального
-          url += '/rpc';
-          body = JSON.stringify({
-            jsonrpc: '2.0',
-            id: Date.now(),
-            method: options.method,
-            params: options.params || []
-          });
-        }
-        break;
-
-      case 'ankr':
-        // Ankr RPC
-        if (provider.apiKey && provider.apiKey !== '') {
+  /**
+   * 🔐 ДОБАВЛЕНИЕ ЗАГОЛОВКОВ АВТОРИЗАЦИИ
+   */
+  private addAuthHeaders(provider: ProviderConfig, headers: Record<string, string>): void {
+    switch (provider.type) {
+      case 'quicknode':
+        // QuickNode использует API key в URL или Basic Auth
+        if (!provider.baseUrl.includes(provider.apiKey)) {
           headers['Authorization'] = `Bearer ${provider.apiKey}`;
         }
-        body = JSON.stringify({
-          jsonrpc: '2.0',
-          id: Date.now(),
-          method: options.method,
-          params: options.params || []
-        });
         break;
-
-      default:
-        // Дефолтный RPC
-        body = JSON.stringify({
-          jsonrpc: '2.0',
-          id: Date.now(),
-          method: options.method,
-          params: options.params || []
-        });
-    }
-
-    return { url, method: 'POST', headers, body };
-  }
-
-  private mapMoralisEndpoint(method: string, params?: any[]): string {
-    // Упрощенный маппинг для Moralis REST API
-    if (method.includes('TokenMetadata') && params?.[0]) {
-      return `/account/${params[0]}/tokens`;
-    }
-    if (method.includes('Balance') && params?.[0]) {
-      return `/account/${params[0]}/balance`;
-    }
-    return '/rpc';
-  }
-
-  // 🔄 НОРМАЛИЗАЦИЯ ОТВЕТОВ
-  private normalizeResponse(providerType: ProviderType, data: any, options: RequestOptions): any {
-    // Для RPC методов возвращаем результат
-    if (data.result !== undefined) {
-      return data.result;
-    }
-
-    // Для Moralis REST API
-    if (providerType === 'moralis' && Array.isArray(data)) {
-      return data;
-    }
-
-    // Возвращаем как есть
-    return data;
-  }
-
-  // 💾 КЕШИРОВАНИЕ
-  private generateCacheKey(options: RequestOptions): string {
-    return `${options.method}:${JSON.stringify(options.params || [])}`;
-  }
-
-  private isCacheable(method: string): boolean {
-    const cacheableMethods = [
-      'getAccountInfo',
-      'getTokenAccountsByOwner',
-      'getTokenMetadata',
-      'getBalance'
-    ];
-    return cacheableMethods.includes(method);
-  }
-
-  private getFromCache(key: string): any | null {
-    const cached = this.responseCache.get(key);
-    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      return cached.data;
-    }
-    return null;
-  }
-
-  private setToCache(key: string, data: any): void {
-    this.responseCache.set(key, {
-      data,
-      timestamp: Date.now()
-    });
-  }
-
-  private startCacheCleanup(): void {
-    setInterval(() => {
-      const now = Date.now();
-      for (const [key, value] of this.responseCache.entries()) {
-        if (now - value.timestamp > this.CACHE_TTL) {
-          this.responseCache.delete(key);
+      
+      case 'alchemy':
+        // Alchemy обычно использует API key в URL
+        break;
+      
+      case 'helius':
+        // Helius использует API key в query параметре
+        break;
+      
+      case 'genesysgo':
+      case 'triton':
+        if (provider.apiKey) {
+          headers['Authorization'] = `Bearer ${provider.apiKey}`;
         }
-      }
-    }, this.CACHE_TTL);
-  }
-
-  // 📊 ОБНОВЛЕНИЕ СТАТИСТИКИ
-  private incrementProviderUsage(provider: APIProvider): void {
-    provider.currentMinuteRequests++;
-    provider.currentDayRequests++;
-    provider.currentMonthRequests++;
-    provider.totalRequests++;
-  }
-
-  private updateProviderStats(provider: APIProvider, success: boolean, responseTime: number): void {
-    if (success) {
-      provider.successfulRequests++;
-    } else {
-      provider.failedRequests++;
-    }
-
-    // Обновляем среднее время ответа (скользящее среднее)
-    if (provider.totalRequests > 0) {
-      const weight = Math.min(provider.totalRequests, 100);
-      provider.avgResponseTime = (provider.avgResponseTime * (weight - 1) + responseTime) / weight;
+        break;
     }
   }
 
-  // ✅ ПРОВЕРКИ
-  private canMakeRequest(provider: APIProvider): boolean {
+  /**
+   * 📊 ОТСЛЕЖИВАНИЕ RATE LIMITS
+   */
+  private trackRateLimits(providerName: string, response: Response): void {
+    const stats = this.providerStats.get(providerName);
+    if (!stats) return;
+
+    // Обновляем счетчики запросов
+    stats.currentMinuteRequests++;
+    stats.currentDayRequests++;
+    stats.currentMonthRequests++;
+
+    // Читаем заголовки rate limit
+    const remaining = response.headers.get('x-ratelimit-remaining') || 
+                     response.headers.get('x-rate-limit-remaining');
+    const reset = response.headers.get('x-ratelimit-reset') || 
+                  response.headers.get('x-rate-limit-reset');
+
+    if (remaining) {
+      // Обновляем информацию о лимитах
+    }
+  }
+
+  /**
+   * 🔍 ПРОВЕРКА ВОЗМОЖНОСТИ ЗАПРОСА
+   */
+  private canMakeRequest(providerName: string): boolean {
+    const provider = this.providers.get(providerName);
+    const stats = this.providerStats.get(providerName);
+    
+    if (!provider || !stats) return false;
+
+    // Сброс счетчиков по времени
     const now = Date.now();
+    const minuteAgo = now - 60000;
+    const dayAgo = now - 86400000;
+    const monthAgo = now - 30 * 86400000;
 
-    // Сброс счетчиков если время истекло
-    if (now > provider.minuteReset) {
-      provider.currentMinuteRequests = 0;
-      provider.minuteReset = now + 60000;
-    }
-
-    if (now > provider.dayReset) {
-      provider.currentDayRequests = 0;
-      provider.dayReset = now + 86400000;
-    }
-
-    if (now > provider.monthReset) {
-      provider.currentMonthRequests = 0;
-      provider.monthReset = now + 30 * 86400000;
-    }
-
-    // Проверяем лимиты (оставляем 10% буфер)
-    return provider.currentMinuteRequests < provider.requestsPerMinute * 0.9 &&
-           provider.currentDayRequests < provider.requestsPerDay * 0.9 &&
-           provider.currentMonthRequests < provider.requestsPerMonth * 0.9;
+    // Простая проверка лимитов (можно улучшить с точным временем)
+    return stats.currentMinuteRequests < provider.requestsPerMinute * 0.9 &&
+           stats.currentDayRequests < provider.requestsPerDay * 0.9 &&
+           stats.currentMonthRequests < provider.requestsPerMonth * 0.9;
   }
 
-  private supportsRequest(provider: APIProvider, options: RequestOptions): boolean {
-    if (!options.requiredSpecialty) return true;
-    return provider.specialties.includes(options.requiredSpecialty);
+  /**
+   * 📈 ОБНОВЛЕНИЕ МЕТРИК ПРОВАЙДЕРА
+   */
+  private updateProviderMetrics(providerName: string, success: boolean, responseTime: number): void {
+    const stats = this.providerStats.get(providerName);
+    if (!stats) return;
+
+    stats.requestCount++;
+    
+    if (success) {
+      stats.consecutiveErrors = 0;
+    } else {
+      stats.errorCount++;
+      stats.consecutiveErrors++;
+      
+      // Помечаем как нездоровый при множественных ошибках
+      if (stats.consecutiveErrors >= 3) {
+        stats.isHealthy = false;
+        this.logger.warn(`💔 Provider ${providerName} marked as unhealthy`);
+      }
+    }
+
+    // Обновляем статистику времени ответа
+    stats.responseTimeHistory.push(responseTime);
+    if (stats.responseTimeHistory.length > 100) {
+      stats.responseTimeHistory.shift(); // Храним только последние 100
+    }
+
+    stats.avgResponseTime = stats.responseTimeHistory.reduce((a, b) => a + b, 0) / stats.responseTimeHistory.length;
+    stats.minResponseTime = Math.min(stats.minResponseTime, responseTime);
+    stats.maxResponseTime = Math.max(stats.maxResponseTime, responseTime);
+    
+    // Обновляем процент успешности
+    stats.successRate = ((stats.requestCount - stats.errorCount) / stats.requestCount) * 100;
+
+    // Обновляем использование лимитов
+    const provider = this.providers.get(providerName);
+    if (provider) {
+      stats.minuteUsage = (stats.currentMinuteRequests / provider.requestsPerMinute) * 100;
+      stats.dayUsage = (stats.currentDayRequests / provider.requestsPerDay) * 100;
+      stats.monthUsage = (stats.currentMonthRequests / provider.requestsPerMonth) * 100;
+    }
+
+    // Обновляем распределение нагрузки
+    this.metrics.providerDistribution[providerName] = (this.metrics.providerDistribution[providerName] || 0) + 1;
   }
 
-  // 🏥 ПРОВЕРКА ЗДОРОВЬЯ
-  private startHealthCheck(): void {
-    this.healthCheckInterval = setInterval(async () => {
-      await this.performHealthCheck();
-    }, 3 * 60 * 1000); // Каждые 3 минуты
-
-    this.logger.info('🏥 Health check started: every 3 minutes');
-  }
-
-  private async performHealthCheck(): Promise<void> {
-    this.logger.info('🏥 Performing provider health check...');
-
+  /**
+   * 🏥 ПРОВЕРКА ЗДОРОВЬЯ ПРОВАЙДЕРОВ
+   */
+  async performHealthCheck(): Promise<HealthCheckResult[]> {
+    const results: HealthCheckResult[] = [];
+    
     const healthPromises = Array.from(this.providers.values()).map(async (provider) => {
+      const startTime = Date.now();
+      const stats = this.providerStats.get(provider.name)!;
+      
       try {
-        const result = await this.executeRequest(provider, {
-          method: 'getSlot',
-          params: [],
-          timeout: 5000
+        await this.executeRequest(provider, 'getSlot', [], 5000);
+        
+        const responseTime = Date.now() - startTime;
+        const wasUnhealthy = !stats.isHealthy;
+        
+        stats.isHealthy = true;
+        stats.consecutiveErrors = 0;
+        
+        if (wasUnhealthy) {
+          this.logger.info(`💚 ${provider.name} recovered (${responseTime}ms)`);
+        }
+
+        results.push({
+          provider: provider.name,
+          isHealthy: true,
+          responseTime,
+          timestamp: new Date(),
+          consecutiveFailures: 0,
+          lastSuccessTime: new Date()
         });
 
-        const wasHealthy = provider.isHealthy;
-        provider.isHealthy = result.success;
-        
-        if (!result.success) {
-          this.logger.warn(`⚠️ ${provider.name} health check failed: ${result.error}`);
-        } else if (!wasHealthy) {
-          this.logger.info(`💚 ${provider.name} recovered!`);
-        }
       } catch (error) {
-        provider.isHealthy = false;
-        this.logger.warn(`⚠️ ${provider.name} health check error:`, error);
+        const responseTime = Date.now() - startTime;
+        stats.isHealthy = false;
+        stats.consecutiveErrors++;
+        
+        results.push({
+          provider: provider.name,
+          isHealthy: false,
+          responseTime,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date(),
+          consecutiveFailures: stats.consecutiveErrors
+        });
+        
+        this.logger.warn(`💔 ${provider.name} health check failed: ${error}`);
       }
     });
 
     await Promise.allSettled(healthPromises);
-
-    const healthyCount = Array.from(this.providers.values()).filter(p => p.isHealthy).length;
-    this.logger.info(`🏥 Health check complete: ${healthyCount}/${this.providers.size} providers healthy`);
+    
+    // Обновляем метрики
+    this.updateHealthMetrics(results);
+    
+    return results;
   }
 
-  // 🔄 СБРОС СЧЕТЧИКОВ
-  private startUsageReset(): void {
-    setInterval(() => {
-      const now = Date.now();
-      for (const provider of this.providers.values()) {
-        if (now > provider.minuteReset) {
-          provider.currentMinuteRequests = 0;
-          provider.minuteReset = now + 60000;
-        }
-      }
-    }, 60000);
-
-    this.logger.info('🔄 Usage reset timers started');
+  /**
+   * 💾 КЕШИРОВАНИЕ
+   */
+  private getFromCache(method: string, params: any[]): CacheEntry | null {
+    const key = this.generateCacheKey(method, params);
+    const entry = this.cache.get(key);
+    
+    if (entry && Date.now() < entry.expiresAt) {
+      entry.hitCount++;
+      return entry;
+    }
+    
+    if (entry) {
+      this.cache.delete(key); // Удаляем устаревшую запись
+    }
+    
+    return null;
   }
 
-  // 📊 СТАТИСТИКА
-  getStats() {
-    const stats = {
-      totalProviders: this.providers.size,
-      healthyProviders: 0,
-      totalRequests: 0,
-      successfulRequests: 0,
-      failedRequests: 0,
-      avgResponseTime: 0,
-      cacheSize: this.responseCache.size,
-      providers: [] as any[]
+  private setToCache(method: string, params: any[], data: any, provider: string): void {
+    const key = this.generateCacheKey(method, params);
+    const ttl = this.cacheConfig.methodTTL[method] || this.cacheConfig.defaultTTL;
+    
+    const entry: CacheEntry = {
+      data,
+      timestamp: Date.now(),
+      expiresAt: Date.now() + ttl * 1000,
+      provider,
+      hitCount: 0
     };
-
-    let totalResponseTime = 0;
-    let totalCount = 0;
-
-    for (const provider of this.providers.values()) {
-      if (provider.isHealthy) stats.healthyProviders++;
-      stats.totalRequests += provider.totalRequests;
-      stats.successfulRequests += provider.successfulRequests;
-      stats.failedRequests += provider.failedRequests;
-      
-      if (provider.totalRequests > 0) {
-        totalResponseTime += provider.avgResponseTime * provider.totalRequests;
-        totalCount += provider.totalRequests;
-      }
-
-      const currentScore = this.calculateAdvancedScore(provider);
-
-      stats.providers.push({
-        name: provider.name,
-        type: provider.type,
-        priority: provider.priority,
-        isHealthy: provider.isHealthy,
-        score: currentScore.toFixed(1),
-        usage: {
-          minute: `${provider.currentMinuteRequests}/${provider.requestsPerMinute}`,
-          day: `${provider.currentDayRequests}/${provider.requestsPerDay}`,
-          month: `${provider.currentMonthRequests}/${provider.requestsPerMonth}`
-        },
-        performance: {
-          totalRequests: provider.totalRequests,
-          successRate: provider.totalRequests > 0 ? 
-            (provider.successfulRequests / provider.totalRequests * 100).toFixed(1) + '%' : '0%',
-          avgResponseTime: provider.avgResponseTime.toFixed(0) + 'ms'
-        },
-        specialties: provider.specialties,
-        lastError: provider.lastError,
-        lastErrorTime: provider.lastErrorTime ? new Date(provider.lastErrorTime).toISOString() : null
-      });
+    
+    // Проверяем размер кеша
+    if (this.cache.size >= this.cacheConfig.maxSize) {
+      this.cleanupCache();
     }
-
-    if (totalCount > 0) {
-      stats.avgResponseTime = Math.round(totalResponseTime / totalCount);
-    }
-
-    // Сортируем провайдеров по скору
-    stats.providers.sort((a, b) => parseFloat(b.score) - parseFloat(a.score));
-
-    return stats;
+    
+    this.cache.set(key, entry);
   }
 
-  // 🧹 ОЧИСТКА
-  shutdown(): void {
+  private generateCacheKey(method: string, params: any[]): string {
+    return `${method}:${JSON.stringify(params)}`;
+  }
+
+  private cleanupCache(): void {
+    const now = Date.now();
+    let removed = 0;
+    
+    // Удаляем устаревшие записи
+    for (const [key, entry] of this.cache.entries()) {
+      if (now >= entry.expiresAt) {
+        this.cache.delete(key);
+        removed++;
+      }
+    }
+    
+    // Если все еще превышаем лимит, удаляем наименее используемые
+    if (this.cache.size >= this.cacheConfig.maxSize) {
+      const entries = Array.from(this.cache.entries());
+      entries.sort((a, b) => a[1].hitCount - b[1].hitCount);
+      
+      const toRemove = Math.floor(this.cacheConfig.maxSize * 0.1); // Удаляем 10%
+      for (let i = 0; i < toRemove; i++) {
+        this.cache.delete(entries[i][0]);
+        removed++;
+      }
+    }
+    
+    if (removed > 0) {
+      this.logger.debug(`🧹 Cache cleanup: removed ${removed} entries`);
+    }
+  }
+
+  /**
+   * 🚀 ФОНОВЫЕ ЗАДАЧИ
+   */
+  private startBackgroundTasks(): void {
+    // Health check каждые 2 минуты
+    this.healthCheckInterval = setInterval(async () => {
+      if (!this.isShuttingDown) {
+        await this.performHealthCheck();
+      }
+    }, 2 * 60 * 1000);
+
+    // Очистка кеша каждую минуту
+    this.cacheCleanupInterval = setInterval(() => {
+      if (!this.isShuttingDown) {
+        this.cleanupCache();
+        this.updateCacheMetrics();
+      }
+    }, this.cacheConfig.cleanupInterval * 1000);
+
+    // Обновление статистики каждые 30 секунд
+    this.statsUpdateInterval = setInterval(() => {
+      if (!this.isShuttingDown) {
+        this.updateMetrics();
+        this.resetCounters();
+      }
+    }, 30000);
+
+    this.logger.info('⚙️ Background tasks started');
+  }
+
+  /**
+   * 📊 ОБНОВЛЕНИЕ МЕТРИК
+   */
+  private updateMetrics(): void {
+    const healthyProviders = Array.from(this.providerStats.values()).filter(s => s.isHealthy).length;
+    
+    this.metrics.healthyProviders = healthyProviders;
+    this.metrics.cacheSize = this.cache.size;
+    
+    if (this.metrics.totalRequests > 0) {
+      this.metrics.cacheHitRate = (this.metrics.cacheHits / (this.metrics.cacheHits + this.metrics.cacheMisses)) * 100;
+    }
+
+    // Выбираем новый основной провайдер если нужно
+    if (!this.primaryProvider || !this.providerStats.get(this.primaryProvider)?.isHealthy) {
+      this.selectPrimaryProvider();
+    }
+  }
+
+  private updateHealthMetrics(results: HealthCheckResult[]): void {
+    this.metrics.healthyProviders = results.filter(r => r.isHealthy).length;
+  }
+
+  private updateCacheMetrics(): void {
+    this.metrics.cacheSize = this.cache.size;
+  }
+
+  private updateRequestMetrics(responseTime: number): void {
+    // Обновляем среднее время ответа
+    const totalTime = this.metrics.avgResponseTime * (this.metrics.totalRequests - 1) + responseTime;
+    this.metrics.avgResponseTime = totalTime / this.metrics.totalRequests;
+  }
+
+  private selectPrimaryProvider(): void {
+    const healthyProviders = Array.from(this.providers.values()).filter(p => {
+      const stats = this.providerStats.get(p.name);
+      return stats?.isHealthy;
+    });
+
+    if (healthyProviders.length === 0) {
+      this.primaryProvider = null;
+      this.metrics.primaryProvider = '';
+      return;
+    }
+
+    // Выбираем провайдер с наивысшим приоритетом и лучшей производительностью
+    const best = this.selectByScore(healthyProviders);
+    
+    if (this.primaryProvider !== best.name) {
+      this.logger.info(`🔄 Primary provider changed: ${this.primaryProvider} → ${best.name}`);
+      this.primaryProvider = best.name;
+      this.metrics.primaryProvider = best.name;
+    }
+  }
+
+  private resetCounters(): void {
+    // Сбрасываем минутные счетчики каждую минуту
+    for (const stats of this.providerStats.values()) {
+      if (Date.now() % 60000 < 30000) { // Приблизительно раз в минуту
+        stats.currentMinuteRequests = 0;
+      }
+    }
+  }
+
+  /**
+   * 🛠️ ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+   */
+  private shouldRetry(error: Error, attempt: number): boolean {
+    if (attempt >= this.retryConfig.maxAttempts - 1) return false;
+
+    const errorMessage = error.message.toLowerCase();
+    
+    // Retry на сетевые ошибки
+    if (this.retryConfig.retryOnErrors.some(code => errorMessage.includes(code.toLowerCase()))) {
+      return true;
+    }
+    
+    // Retry на таймауты
+    if (this.retryConfig.retryOnTimeout && errorMessage.includes('timeout')) {
+      return true;
+    }
+    
+    // Retry на rate limits
+    if (this.retryConfig.retryOnRateLimit && (errorMessage.includes('rate limit') || errorMessage.includes('429'))) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  private generateRequestId(): string {
+    return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  private calculateVariance(numbers: number[]): number {
+    if (numbers.length === 0) return 0;
+    
+    const mean = numbers.reduce((a, b) => a + b, 0) / numbers.length;
+    const variance = numbers.reduce((sum, num) => sum + Math.pow(num - mean, 2), 0) / numbers.length;
+    
+    return variance;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * 📊 ПУБЛИЧНЫЕ МЕТОДЫ ДЛЯ ПОЛУЧЕНИЯ СТАТИСТИКИ
+   */
+  public getMetrics(): MultiProviderMetrics {
+    return { ...this.metrics };
+  }
+
+  public getProviderStats(): ProviderStats[] {
+    return Array.from(this.providerStats.values());
+  }
+
+  public getHealthyProviders(): ProviderConfig[] {
+    return Array.from(this.providers.values()).filter(p => {
+      const stats = this.providerStats.get(p.name);
+      return stats?.isHealthy;
+    });
+  }
+
+  public getPrimaryProvider(): ProviderConfig | null {
+    return this.primaryProvider ? this.providers.get(this.primaryProvider) || null : null;
+  }
+
+  /**
+   * 🧹 ОЧИСТКА И ЗАВЕРШЕНИЕ
+   */
+  public async shutdown(): Promise<void> {
+    this.logger.info('🔴 Shutting down MultiProviderService...');
+    this.isShuttingDown = true;
+
+    // Останавливаем фоновые задачи
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
     }
-    this.responseCache.clear();
-    this.logger.info('🔴 MultiProviderService shutdown completed');
+
+    if (this.cacheCleanupInterval) {
+      clearInterval(this.cacheCleanupInterval);
+      this.cacheCleanupInterval = null;
+    }
+
+    if (this.statsUpdateInterval) {
+      clearInterval(this.statsUpdateInterval);
+      this.statsUpdateInterval = null;
+    }
+
+    // Очищаем кеш
+    this.cache.clear();
+
+    this.logger.info('✅ MultiProviderService shutdown completed');
   }
 
-  // 🎯 УДОБНЫЕ МЕТОДЫ
-  async getSignaturesForAddress(address: string, options?: { limit?: number; before?: string }): Promise<any> {
-    return this.makeRequest({
-      method: 'getSignaturesForAddress',
-      params: [address, options || {}],
-      requiredSpecialty: 'rpc'
-    });
+  /**
+   * 🚀 УДОБНЫЕ МЕТОДЫ ДЛЯ ОСНОВНЫХ RPC ВЫЗОВОВ
+   */
+  public async getAccountInfo(address: string, options?: any): Promise<APIResponse> {
+    return this.makeRequest('getAccountInfo', [address, options || { encoding: 'jsonParsed' }]);
   }
 
-  async getTransaction(signature: string): Promise<any> {
-    return this.makeRequest({
-      method: 'getTransaction',
-      params: [signature, { encoding: 'jsonParsed', commitment: 'confirmed' }],
-      requiredSpecialty: 'rpc'
-    });
+  public async getSignaturesForAddress(address: string, options?: any): Promise<APIResponse> {
+    return this.makeRequest('getSignaturesForAddress', [address, options || {}]);
   }
 
-  async getAccountInfo(address: string): Promise<any> {
-    return this.makeRequest({
-      method: 'getAccountInfo',
-      params: [address, { encoding: 'jsonParsed' }],
-      requiredSpecialty: 'rpc'
-    });
+  public async getTransaction(signature: string, options?: any): Promise<APIResponse> {
+    return this.makeRequest('getTransaction', [signature, options || { encoding: 'jsonParsed', commitment: 'confirmed' }]);
   }
 
-  async getTokenAccountsByOwner(owner: string, mint?: string): Promise<any> {
-    const filter = mint ? 
-      { mint } : 
-      { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' };
-
-    return this.makeRequest({
-      method: 'getTokenAccountsByOwner',
-      params: [owner, filter, { encoding: 'jsonParsed' }],
-      requiredSpecialty: 'tokens'
-    });
+  public async getTokenAccountsByOwner(owner: string, filter: any, options?: any): Promise<APIResponse> {
+    return this.makeRequest('getTokenAccountsByOwner', [owner, filter, options || { encoding: 'jsonParsed' }]);
   }
 
-  async getBalance(address: string): Promise<any> {
-    return this.makeRequest({
-      method: 'getBalance',
-      params: [address],
-      requiredSpecialty: 'rpc'
-    });
+  public async getBalance(address: string): Promise<APIResponse> {
+    return this.makeRequest('getBalance', [address]);
+  }
+
+  public async getSlot(): Promise<APIResponse> {
+    return this.makeRequest('getSlot', []);
+  }
+
+  public async getBlockHeight(): Promise<APIResponse> {
+    return this.makeRequest('getBlockHeight', []);
+  }
+
+  public async getRecentBlockhash(commitment?: string): Promise<APIResponse> {
+    return this.makeRequest('getRecentBlockhash', [commitment || 'confirmed']);
   }
 }
-
-// 📝 ENV переменные для .env файла:
-/*
-# Основные (обязательные)
-QUICKNODE_HTTP_URL=https://your-endpoint.quiknode.pro/your-key/
-QUICKNODE_API_KEY=your_quicknode_key
-
-ALCHEMY_HTTP_URL=https://solana-mainnet.g.alchemy.com/v2/v7f2LOpqOJTp0h7JyI2AZEUu-bN25-JR
-ALCHEMY_API_KEY=v7f2LOpqOJTp0h7JyI2AZEUu-bN25-JR
-
-# Дополнительные (опциональные)
-GETBLOCK_API_KEY=your_getblock_key
-MORALIS_API_KEY=your_moralis_key  
-ANKR_API_KEY=your_ankr_key
-*/
