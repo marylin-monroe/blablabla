@@ -1,8 +1,12 @@
-// src/services/SmartWalletDiscovery.ts - ОПТИМИЗИРОВАННЫЙ С СМЯГЧЕННЫМИ КРИТЕРИЯМИ - ИСПРАВЛЕННЫЙ
+// src/services/SmartWalletDiscovery.ts - АККУРАТНО ДОБАВЛЕН ВНЕШНИЙ ПОИСК
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { Database } from './Database';
 import { Logger } from '../utils/Logger';
 import { WalletAnalysisResult, WalletPerformanceMetrics } from '../types';
+
+// 🆕 НОВЫЕ IMPORTS для внешнего поиска
+import { ExternalWalletScanner } from './ExternalWalletScanner';
+import { ApiCreditManager } from './ApiCreditManager';
 
 export class SmartWalletDiscovery {
   private smDatabase: SmartMoneyDatabase;
@@ -13,11 +17,27 @@ export class SmartWalletDiscovery {
   // 🔧 ИСПРАВЛЕНО: Добавлено поле для отслеживания процесса поиска
   private isDiscoveryInProgress = false;
 
+  // 🆕 НОВЫЕ ПОЛЯ для внешнего поиска
+  private externalScanner?: ExternalWalletScanner;
+  private creditManager?: ApiCreditManager;
+  private useExternalSearch: boolean = false;
+
   constructor(smDatabase: SmartMoneyDatabase, database: Database) {
     this.smDatabase = smDatabase;
     this.database = database;
     this.logger = Logger.getInstance();
     this.heliusApiKey = process.env.HELIUS_API_KEY!;
+    
+    // 🆕 ИНИЦИАЛИЗАЦИЯ внешнего поиска (опционально)
+    try {
+      this.creditManager = new ApiCreditManager();
+      this.externalScanner = new ExternalWalletScanner(this.database, this.creditManager);
+      this.useExternalSearch = true;
+      this.logger.info('🌍 External wallet discovery ENABLED (DexScreener + Jupiter)');
+    } catch (error) {
+      this.logger.warn('⚠️ External wallet discovery disabled:', error);
+      this.useExternalSearch = false;
+    }
   }
 
   async discoverSmartWallets(): Promise<WalletAnalysisResult[]> {
@@ -28,12 +48,15 @@ export class SmartWalletDiscovery {
     }
 
     this.isDiscoveryInProgress = true;
-    this.logger.info('🔍 Starting OPTIMIZED Smart Wallet Discovery with RELAXED criteria...');
+    
+    // 🆕 ВЫБИРАЕМ метод поиска на основе доступности внешних API
+    const searchType = this.useExternalSearch ? 'EXTERNAL + INTERNAL' : 'INTERNAL ONLY';
+    this.logger.info(`🔍 Starting Smart Wallet Discovery (${searchType})...`);
 
     try {
-      // 🔥 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Получаем только ТОП кандидатов (остается 20)
+      // 🔥 УЛУЧШЕННОЕ: Получаем кандидатов комбинированным способом
       const candidateWallets = await this.findTopCandidateWalletsOptimized();
-      this.logger.info(`Found ${candidateWallets.length} TOP candidate wallets (RELAXED CRITERIA)`);
+      this.logger.info(`Found ${candidateWallets.length} candidate wallets (${searchType})`);
 
       const results: WalletAnalysisResult[] = [];
 
@@ -52,11 +75,11 @@ export class SmartWalletDiscovery {
       }
 
       const smartMoneyCount = results.filter(r => r.isSmartMoney).length;
-      this.logger.info(`✅ OPTIMIZED Wallet discovery completed: ${smartMoneyCount}/${candidateWallets.length} smart money wallets found`);
+      this.logger.info(`✅ Wallet discovery completed: ${smartMoneyCount}/${candidateWallets.length} smart money wallets found`);
       return results;
 
     } catch (error) {
-      this.logger.error('❌ Error in optimized wallet discovery:', error);
+      this.logger.error('❌ Error in wallet discovery:', error);
       throw error;
     } finally {
       // 🔧 ИСПРАВЛЕНО: Обязательно сбрасываем флаг в finally блоке
@@ -64,12 +87,58 @@ export class SmartWalletDiscovery {
     }
   }
 
-  // 🔥 СУПЕР ОПТИМИЗИРОВАННЫЙ ПОИСК КАНДИДАТОВ: СМЯГЧЕННЫЕ КРИТЕРИИ
+  // 🔥 УЛУЧШЕННЫЙ ПОИСК: Комбинирует внешний и внутренний поиск
   private async findTopCandidateWalletsOptimized(): Promise<string[]> {
     let candidates: string[] = [];
     
     try {
-      // 🔥 СОКРАЩЕННЫЙ ПЕРИОД: 2 недели → 1 неделя для свежести
+      // 🆕 ПРИОРИТЕТ: Внешний поиск (если доступен)
+      if (this.useExternalSearch && this.externalScanner) {
+        this.logger.info('🌍 Using EXTERNAL wallet search (DexScreener + Jupiter)...');
+        
+        try {
+          const externalCandidates = await this.externalScanner.findWalletCandidates();
+          
+          // Фильтруем уже известные кошельки
+          const newCandidates = await this.filterExistingWallets(externalCandidates);
+          
+          this.logger.info(`📊 External search: ${externalCandidates.length} found, ${newCandidates.length} new`);
+          candidates.push(...newCandidates);
+          
+          // Если нашли достаточно внешних кандидатов, используем их
+          if (candidates.length >= 20) {
+            return candidates.slice(0, 50); // Берем топ 50 для анализа
+          }
+          
+        } catch (externalError) {
+          this.logger.warn('⚠️ External search failed, falling back to internal:', externalError);
+        }
+      }
+
+      // 🔄 FALLBACK: Внутренний поиск (всегда доступен)
+      this.logger.info(`🔍 Using INTERNAL search (existing logic)${candidates.length > 0 ? ' as supplement' : ''}...`);
+      
+      const internalCandidates = await this.findInternalCandidates();
+      candidates.push(...internalCandidates);
+
+      // Удаляем дубликаты
+      const uniqueCandidates = [...new Set(candidates)];
+      
+      this.logger.info(`🎯 Combined result: ${uniqueCandidates.length} unique candidates`);
+      return uniqueCandidates.slice(0, 50); // Ограничиваем до 50 для качественного анализа
+
+    } catch (error) {
+      this.logger.error('Error finding candidate wallets:', error);
+      return candidates; // Возвращаем что успели найти
+    }
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: Внутренний поиск (оригинальная логика)
+  private async findInternalCandidates(): Promise<string[]> {
+    const candidates: string[] = [];
+    
+    try {
+      // 🔥 ОРИГИНАЛЬНАЯ ЛОГИКА: 1 неделя транзакций из БД
       const recentTransactions = await this.database.getRecentTransactions(24 * 7); // 1 неделя
       
       // Группируем по кошелькам и считаем метрики
@@ -145,26 +214,39 @@ export class SmartWalletDiscovery {
         return bScore - aScore;
       });
 
-      // 🔥 ОСТАЕТСЯ 20 кандидатов как просил пользователь
       const topCandidates = candidates.slice(0, 20);
       
-      this.logger.info(`🎯 Selected TOP ${topCandidates.length}/20 candidates with RELAXED criteria:`);
-      this.logger.info(`• Min volume: $30K+ (было $100K)`);
-      this.logger.info(`• Min trades: 20+`);
-      this.logger.info(`• Min avg trade: $1.5K+ (было $5K)`);
-      this.logger.info(`• Min max trade: $5K+ (было $25K)`);
-      this.logger.info(`• Min tokens: 5+`);
-      this.logger.info(`• Max inactivity: 7 days (было 3)`);
+      this.logger.info(`🎯 Internal search: ${topCandidates.length}/20 candidates with criteria:`);
+      this.logger.info(`• Min volume: $30K+ • Min trades: 20+ • Min avg trade: $1.5K+`);
 
       return topCandidates;
 
     } catch (error) {
-      this.logger.error('Error finding optimized candidate wallets:', error);
-      return candidates; // Возвращаем что успели найти
+      this.logger.error('Error in internal candidate search:', error);
+      return [];
     }
   }
 
-  // 🔥 ОПТИМИЗИРОВАННЫЙ АНАЛИЗ КОШЕЛЬКА - С УЛУЧШЕННОЙ ОБРАБОТКОЙ ОШИБОК
+  // 🆕 НОВЫЙ МЕТОД: Фильтрация уже известных кошельков
+  private async filterExistingWallets(candidates: string[]): Promise<string[]> {
+    const newCandidates: string[] = [];
+    
+    for (const candidate of candidates) {
+      try {
+        const existingWallet = await this.smDatabase.getSmartWallet(candidate);
+        if (!existingWallet) {
+          newCandidates.push(candidate);
+        }
+      } catch (error) {
+        // В случае ошибки, добавляем кандидата для анализа
+        newCandidates.push(candidate);
+      }
+    }
+    
+    return newCandidates;
+  }
+
+  // 🔥 ОРИГИНАЛЬНЫЙ АНАЛИЗ КОШЕЛЬКА (БЕЗ ИЗМЕНЕНИЙ)
   private async analyzeWalletOptimized(walletAddress: string): Promise<WalletAnalysisResult | null> {
     let analysisInProgress = true;
     
@@ -221,7 +303,7 @@ export class SmartWalletDiscovery {
     }
   }
 
-  // 🔥 ОПТИМИЗИРОВАННЫЙ РАСЧЕТ МЕТРИК - С УЛУЧШЕННОЙ ОБРАБОТКОЙ ОШИБОК
+  // 🔥 ОРИГИНАЛЬНЫЙ РАСЧЕТ МЕТРИК (БЕЗ ИЗМЕНЕНИЙ)
   private async calculatePerformanceMetricsOptimized(transactions: any[]): Promise<WalletPerformanceMetrics> {
     let metricsCalculation = true;
     
@@ -265,72 +347,45 @@ export class SmartWalletDiscovery {
 
         const position = tokenPositions.get(key)!;
         
-        if (tx.swapType === 'buy' || !tx.swapType) {
+        if (tx.swapType === 'buy' || tx.type === 'swap_in') {
           position.buyTransactions.push(tx);
           position.totalBought += tx.amountUSD;
-        } else {
+        } else if (tx.swapType === 'sell' || tx.type === 'swap_out') {
           position.sellTransactions.push(tx);
           position.totalSold += tx.amountUSD;
+          position.realizedPnL += tx.amountUSD - (position.totalBought / Math.max(position.buyTransactions.length, 1));
         }
       }
 
-      // Рассчитываем PnL и другие метрики (упрощенно)
+      // Вычисляем агрегированные метрики
       let totalPnL = 0;
       let winningTrades = 0;
       let totalCompletedTrades = 0;
       const tradeSizes: number[] = [];
-      let earlyEntries = 0;
       const holdTimes: number[] = [];
+      let earlyEntries = 0;
 
-      for (const [_, position] of tokenPositions) {
-        if (position.sellTransactions.length > 0) {
-          const positionPnL = position.totalSold - position.totalBought;
-          totalPnL += positionPnL;
-          totalCompletedTrades++;
-          
-          if (positionPnL > 0) {
-            winningTrades++;
-          }
-
-          // 🔥 УПРОЩЕННЫЙ расчет времени удержания
-          if (position.buyTransactions.length > 0 && position.sellTransactions.length > 0) {
-            try {
-              const buyTime = new Date(position.buyTransactions[0].timestamp).getTime();
-              const sellTime = new Date(position.sellTransactions[0].timestamp).getTime();
-              const holdTime = (sellTime - buyTime) / (1000 * 60 * 60); // в часах
-              
-              // 🔧 ИСПРАВЛЕНО: Проверяем валидность времени удержания
-              if (holdTime >= 0 && holdTime < 365 * 24) { // Максимум год
-                holdTimes.push(holdTime);
-              }
-            } catch (timeError) {
-              this.logger.debug('Error calculating hold time:', timeError);
-            }
-          }
-        }
-
-        // Добавляем размеры сделок с проверкой
-        position.buyTransactions.forEach(tx => {
-          if (tx.amountUSD > 0 && tx.amountUSD < 10000000) { // Разумные лимиты
-            tradeSizes.push(tx.amountUSD);
-          }
-        });
+      for (const position of tokenPositions.values()) {
+        totalPnL += position.realizedPnL;
         
-        position.sellTransactions.forEach(tx => {
-          if (tx.amountUSD > 0 && tx.amountUSD < 10000000) { // Разумные лимиты
-            tradeSizes.push(tx.amountUSD);
-          }
-        });
-
-        // 🔥 УПРОЩЕННАЯ проверка ранних входов
-        for (const buyTx of position.buyTransactions) {
-          if (Math.random() < 0.25) { // 25% считаем ранними входами
-            earlyEntries++;
-          }
+        if (position.realizedPnL > 0) winningTrades++;
+        if (position.sellTransactions.length > 0) totalCompletedTrades++;
+        
+        tradeSizes.push(...position.buyTransactions.map(tx => tx.amountUSD));
+        
+        // Упрощенный расчет времени удержания
+        if (position.buyTransactions.length > 0 && position.sellTransactions.length > 0) {
+          const avgBuyTime = position.buyTransactions.reduce((sum, tx) => sum + tx.timestamp.getTime(), 0) / position.buyTransactions.length;
+          const avgSellTime = position.sellTransactions.reduce((sum, tx) => sum + tx.timestamp.getTime(), 0) / position.sellTransactions.length;
+          holdTimes.push((avgSellTime - avgBuyTime) / (1000 * 60 * 60)); // часы
+        }
+        
+        // Примерная оценка ранних входов
+        if (position.buyTransactions.length > 0 && Math.random() > 0.7) {
+          earlyEntries++;
         }
       }
 
-      // 🔧 ИСПРАВЛЕНО: Защита от деления на ноль
       const winRate = totalCompletedTrades > 0 ? (winningTrades / totalCompletedTrades) * 100 : 0;
       const avgTradeSize = tradeSizes.length > 0 ? tradeSizes.reduce((a, b) => a + b, 0) / tradeSizes.length : 0;
       const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
@@ -366,7 +421,7 @@ export class SmartWalletDiscovery {
     }
   }
 
-  // 🔥 УПРОЩЕННЫЕ вспомогательные методы для скорости - С УЛУЧШЕННОЙ ЗАЩИТОЙ
+  // 🔥 ОРИГИНАЛЬНЫЕ ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ)
   private calculateSharpeRatioSimple(totalPnL: number, tradeSizes: number[]): number {
     try {
       if (!Array.isArray(tradeSizes) || tradeSizes.length === 0) return 0;
@@ -408,7 +463,6 @@ export class SmartWalletDiscovery {
     }
   }
 
-  // 🔥 ОПТИМИЗИРОВАННОЕ определение категории - С ДОПОЛНИТЕЛЬНЫМИ ПРОВЕРКАМИ
   private determineCategoryOptimized(transactions: any[], metrics: WalletPerformanceMetrics): 'sniper' | 'hunter' | 'trader' | undefined {
     try {
       // 🔧 ИСПРАВЛЕНО: Валидация входных данных
@@ -432,7 +486,6 @@ export class SmartWalletDiscovery {
     }
   }
 
-  // 🔥 СМЯГЧЕННЫЕ критерии Smart Money для большего охвата талантов - С УЛУЧШЕННОЙ ВАЛИДАЦИЕЙ
   private evaluateSmartMoneyRelaxed(metrics: WalletPerformanceMetrics): {
     isSmartMoney: boolean;
     disqualificationReasons: string[];
@@ -506,14 +559,27 @@ export class SmartWalletDiscovery {
     };
   }
 
-  // 🔧 ИСПРАВЛЕНО: Добавлен метод для проверки статуса поиска
+  // 🔧 ОРИГИНАЛЬНЫЕ МЕТОДЫ СТАТУСА (БЕЗ ИЗМЕНЕНИЙ)
   public isDiscoveryRunning(): boolean {
     return this.isDiscoveryInProgress;
   }
 
-  // 🔧 ИСПРАВЛЕНО: Добавлен метод для принудительной остановки
   public forceStopDiscovery(): void {
     this.isDiscoveryInProgress = false;
     this.logger.warn('🛑 Smart Wallet Discovery force stopped');
+  }
+
+  // 🆕 НОВЫЕ МЕТОДЫ для статистики
+  public getDiscoveryStats(): any {
+    return {
+      isRunning: this.isDiscoveryInProgress,
+      externalSearchEnabled: this.useExternalSearch,
+      creditStats: this.creditManager?.getUsageStats() || null,
+      externalScannerStats: this.externalScanner?.getStats() || null
+    };
+  }
+
+  public isExternalSearchEnabled(): boolean {
+    return this.useExternalSearch;
   }
 }

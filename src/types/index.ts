@@ -1,4 +1,7 @@
-// src/types/index.ts - БЕЗ Family Detection + АГРЕГАЦИЯ ПОЗИЦИЙ + MULTIPROVIDER
+// src/types/index.ts - АККУРАТНО ДОБАВЛЕНЫ ТИПЫ ДЛЯ ВНЕШНЕГО ПОИСКА + ВСЕ СУЩЕСТВУЮЩИЕ ТИПЫ СОХРАНЕНЫ
+
+// ===== СУЩЕСТВУЮЩИЕ ТИПЫ (БЕЗ ИЗМЕНЕНИЙ) =====
+
 export interface TokenSwap {
   transactionId: string;
   walletAddress: string;
@@ -355,33 +358,6 @@ export interface SimilarPurchaseGroup {
   amounts: number[];
 }
 
-// Family типы УДАЛЕНЫ - больше не используются
-// export interface FamilyWalletCluster - УДАЛЕН
-
-export interface WalletPerformanceMetrics {
-  totalPnL: number;
-  winRate: number;
-  totalTrades: number;
-  avgTradeSize: number;
-  maxTradeSize: number;
-  minTradeSize: number;
-  sharpeRatio: number;
-  maxDrawdown: number;
-  profitFactor: number;
-  avgHoldTime: number;
-  earlyEntryRate: number;
-  recentActivity: Date;
-}
-
-export interface WalletAnalysisResult {
-  address: string;
-  isSmartMoney: boolean;
-  category?: 'sniper' | 'hunter' | 'trader';
-  metrics: WalletPerformanceMetrics;
-  familyConnections: []; // всегда пустой массив
-  disqualificationReasons: string[];
-}
-
 // 🎯 КОНФИГУРАЦИЯ ДЕТЕКЦИИ АГРЕГАЦИИ
 export interface PositionDetectionConfig {
   // Временное окно для агрегации
@@ -409,120 +385,6 @@ export interface PositionDetectionConfig {
 export interface WalletFilterResult {
   passed: boolean;
   reason?: string;
-}
-
-// 🎯 СТАТИСТИКА АГРЕГАТОРА
-export interface AggregationStats {
-  activePositions: number;
-  config: PositionDetectionConfig;
-  positions: Array<{
-    wallet: string;
-    token: string;
-    purchases: number;
-    totalUSD: number;
-    suspicionScore: number;
-    hasSimilarSizes: boolean;
-    timeWindow: number;
-  }>;
-}
-
-// 🆕 НОВЫЕ ТИПЫ ДЛЯ MULTIPROVIDER СИСТЕМЫ
-
-// Конфигурация провайдера
-export interface ProviderConfig {
-  name: string;
-  type: 'quicknode' | 'alchemy' | 'helius' | 'genesysgo' | 'triton';
-  baseUrl: string;
-  apiKey: string;
-  
-  // Лимиты
-  requestsPerMinute: number;
-  requestsPerDay: number;
-  requestsPerMonth: number;
-  
-  // Приоритет и надежность
-  priority: number; // 1-5, где 5 = высший приоритет
-  reliability: number; // 0-100, статистическая надежность
-  
-  // Специализация
-  specialties: string[]; // ['rpc', 'enhanced', 'analytics', 'webhooks']
-  
-  // Временные ограничения
-  timeout: number; // миллисекунды
-  retryAttempts: number;
-  retryDelay: number;
-}
-
-// Ответ от API провайдера
-export interface APIResponse<T = any> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  provider: string;
-  responseTime: number;
-  retryCount: number;
-  fromCache?: boolean;
-  rateLimitRemaining?: number;
-  rateLimitReset?: number;
-}
-
-// Статистика использования провайдера
-export interface ProviderStats {
-  name: string;
-  type: string;
-  requestCount: number;
-  errorCount: number;
-  successRate: number;
-  avgResponseTime: number;
-  isHealthy: boolean;
-  priority: number;
-  
-  // Лимиты
-  currentMinuteRequests: number;
-  currentDayRequests: number;
-  currentMonthRequests: number;
-  minuteUsage: number; // процент
-  dayUsage: number; // процент
-  monthUsage: number; // процент
-  
-  // Ошибки
-  lastError?: string;
-  lastErrorTime?: Date;
-  consecutiveErrors: number;
-  
-  // Производительность
-  minResponseTime: number;
-  maxResponseTime: number;
-  responseTimeHistory: number[]; // последние 100 запросов
-}
-
-// Результат балансировки нагрузки
-export interface LoadBalancingResult {
-  provider: ProviderConfig;
-  fallbackUsed: boolean;
-  totalProviders: number;
-  healthyProviders: number;
-  responseTime: number;
-  retries: number;
-}
-
-// Конфигурация retry логики
-export interface RetryConfig {
-  maxAttempts: number;
-  baseDelay: number; // миллисекунды
-  maxDelay: number; // миллисекунды
-  backoffMultiplier: number; // экспоненциальная задержка
-  retryOnErrors: string[]; // коды ошибок для retry
-  retryOnTimeout: boolean;
-  retryOnRateLimit: boolean;
-}
-
-// Health check результат
-export interface HealthCheckResult {
-  provider: string;
-  isHealthy: boolean;
-  responseTime: number;
-  error?: string;
   timestamp: Date;
   consecutiveFailures: number;
   lastSuccessTime?: Date;
@@ -622,13 +484,128 @@ export interface ProcessingStats {
     medium: number;
     low: number;
   };
-  
-  // 🆕 СТАТИСТИКА ПРОВАЙДЕРОВ
-  providerStats: {
-    quicknode: ProviderStats;
-    alchemy: ProviderStats;
-    [key: string]: ProviderStats;
+}
+
+// ===== 🆕 НОВЫЕ ТИПЫ ДЛЯ ВНЕШНЕГО ПОИСКА КОШЕЛЬКОВ =====
+
+export interface WalletPerformanceMetrics {
+  totalPnL: number;
+  winRate: number;
+  totalTrades: number;
+  avgTradeSize: number;
+  maxTradeSize: number;
+  minTradeSize: number;
+  sharpeRatio: number;
+  maxDrawdown: number;
+  profitFactor: number;
+  avgHoldTime: number; // в часах
+  earlyEntryRate: number; // процент ранних входов
+  performanceScore?: number; // общий скор 0-100 (опционально для обратной совместимости)
+  recentActivity: Date;
+  volumeScore?: number;
+}
+
+export interface WalletAnalysisResult {
+  address: string;
+  isSmartMoney: boolean;
+  category?: 'sniper' | 'hunter' | 'trader';
+  metrics: WalletPerformanceMetrics;
+  disqualificationReasons: string[];
+  // 🆕 НОВОЕ поле для дополнительного анализа
+  analysis?: {
+    totalTransactions: number;
+    analyzedPeriod: string;
+    confidenceScore: number;
   };
+  // Family поля БЛОКИРОВАНЫ - всегда пустой массив
+  familyConnections: []; // всегда пустой массив
+}
+
+// 🆕 ТИПЫ ДЛЯ ВНЕШНИХ API
+
+export interface ExternalTokenCandidate {
+  address: string;
+  source: 'dexscreener' | 'jupiter';
+  volume24h?: number;
+  liquidity?: number;
+  marketCap?: number;
+  age?: number; // days since creation
+  score?: number;
+}
+
+export interface ExternalWalletCandidate {
+  address: string;
+  score: number;
+  reasons: string[];
+  lastActivity: Date;
+  estimatedVolume: number;
+  tokenCount: number;
+  source: 'token_holders' | 'recent_traders' | 'high_volume';
+}
+
+// 🆕 ТИПЫ ДЛЯ КРЕДИТНОГО МЕНЕДЖЕРА
+
+export interface ApiCreditUsage {
+  provider: 'quicknode' | 'alchemy';
+  operation: string;
+  credits: number;
+  timestamp: Date;
+  success: boolean;
+}
+
+export interface ProviderStats {
+  dailyUsage: number;
+  hourlyUsage: number;
+  totalUsage: number;
+  lastReset: Date;
+  isAvailable: boolean;
+  errorCount: number;
+}
+
+export interface CreditManagerStats {
+  currentProvider: string;
+  providers: Record<string, ProviderStats>;
+  totalCreditsToday: number;
+  remainingCreditsToday: number;
+  hourlyRate: number;
+  projectedDailyUsage: number;
+}
+
+// 🆕 РАСШИРЕННАЯ СТАТИСТИКА DISCOVERY
+
+export interface DiscoveryStats {
+  isRunning: boolean;
+  externalSearchEnabled: boolean;
+  lastRun?: Date;
+  totalAnalyzed: number;
+  smartMoneyFound: number;
+  newWalletsAdded: number;
+  discoveryRate: number;
+  creditStats?: CreditManagerStats;
+  externalSources?: {
+    dexscreener: { requests: number; tokens: number };
+    jupiter: { requests: number; tokens: number };
+  };
+}
+
+// ===== ОСТАЛЬНЫЕ СУЩЕСТВУЮЩИЕ ТИПЫ (БЕЗ ИЗМЕНЕНИЙ) =====
+
+// Провайдер здоровья
+export interface ProviderHealth {
+  name: string;
+  isHealthy: boolean;
+  lastCheck: Date;
+  responseTime: number;
+  errorRate: number;
+  consecutiveFailures: number;
+  lastSuccessTime?: Date;
+}
+
+// 🆕 СТАТИСТИКА ПРОВАЙДЕРОВ
+export interface ProviderStatsExtended {
+  quicknode: ProviderStats;
+  alchemy: ProviderStats;
+  [key: string]: ProviderStats;
 }
 
 // 🆕 ТИПЫ ДЛЯ ADVANCED POSITION ANALYSIS

@@ -1,4 +1,4 @@
-// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ + 48h DISCOVERY - С АВТОМАТИЧЕСКОЙ МИГРАЦИЕЙ БД + ИСПРАВЛЕНА FOREIGN KEY ПРОБЛЕМА + TELEGRAM КОМАНДЫ
+// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ + 48h DISCOVERY - С АВТОМАТИЧЕСКОЙ МИГРАЦИЕЙ БД + ИСПРАВЛЕНА FOREIGN KEY ПРОБЛЕМА + TELEGRAM КОМАНДЫ + 🆕 EXTERNAL SEARCH - ИСПРАВЛЕНЫ ОШИБКИ ТАЙМЕРОВ И TYPESCRIPT
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -65,7 +65,9 @@ class SmartMoneyBotRunner {
     
     this.webhookManager = new QuickNodeWebhookManager();
 
-    this.logger.info('✅ Smart Money Bot services initialized (OPTIMIZED + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS)');
+    // 🆕 ДИНАМИЧЕСКОЕ логгирование на основе доступности внешнего поиска
+    const externalSearchStatus = this.walletDiscovery.isExternalSearchEnabled?.() ? '+ EXTERNAL SEARCH' : '';
+    this.logger.info(`✅ Smart Money Bot services initialized (OPTIMIZED + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS ${externalSearchStatus})`);
   }
 
   // 🔧 НОВЫЙ МЕТОД: АВТОМАТИЧЕСКАЯ МИГРАЦИЯ БАЗЫ ДАННЫХ
@@ -578,7 +580,18 @@ class SmartMoneyBotRunner {
       const aggregationStats = this.solanaMonitor.getAggregationStats();
       const notificationStats = this.telegramNotifier.getNotificationStats();
 
-      await this.telegramNotifier.sendStatsResponse({
+      // 🆕 ИСПРАВЛЕНО: Безопасное получение discoveryStats с проверкой на null
+      let discoveryStats = null;
+      try {
+        if (this.walletDiscovery.getDiscoveryStats) {
+          discoveryStats = this.walletDiscovery.getDiscoveryStats();
+        }
+      } catch (error) {
+        this.logger.debug('Discovery stats not available:', error);
+      }
+
+      // 🔧 ИСПРАВЛЕНО: Формируем объект только с валидными полями
+      const statsData: any = {
         walletStats,
         dbStats,
         pollingStats,
@@ -587,7 +600,14 @@ class SmartMoneyBotRunner {
         notificationStats,
         webhookMode: this.webhookId === 'polling-mode' ? 'polling' : 'webhook',
         uptime: process.uptime()
-      });
+      };
+
+      // Добавляем discoveryStats только если они доступны
+      if (discoveryStats) {
+        statsData.discoveryStats = discoveryStats;
+      }
+
+      await this.telegramNotifier.sendStatsResponse(statsData);
 
     } catch (error) {
       this.logger.error('Error processing /stats command:', error);
@@ -697,7 +717,19 @@ class SmartMoneyBotRunner {
     try {
       this.logger.info('🔍 Processing /discover command');
       
-      await this.telegramNotifier.sendCycleLog('🔍 <b>Starting forced wallet discovery...</b>\n\nThis may take 2-3 minutes.');
+      // 🆕 ДИНАМИЧЕСКОЕ сообщение на основе типа поиска
+      let searchType = 'wallet discovery';
+      try {
+        if (this.walletDiscovery.isExternalSearchEnabled?.()) {
+          searchType = 'EXTERNAL wallet discovery via DexScreener + Jupiter';
+        } else {
+          searchType = 'INTERNAL wallet discovery (database analysis)';
+        }
+      } catch (error) {
+        // Если метод недоступен, используем стандартное сообщение
+      }
+      
+      await this.telegramNotifier.sendCycleLog(`🔍 <b>Starting forced ${searchType}...</b>\n\nThis may take 2-3 minutes.`);
 
       const discoveryResults = await this.walletDiscovery.discoverSmartWallets();
       
@@ -767,7 +799,17 @@ class SmartMoneyBotRunner {
 
   async start(): Promise<void> {
     try {
-      this.logger.info('🚀 Starting OPTIMIZED Smart Money Bot System + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS...');
+      // 🆕 ДИНАМИЧЕСКОЕ стартовое сообщение
+      let startupMessage = '🚀 Starting Smart Money Bot System + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS';
+      try {
+        if (this.walletDiscovery.isExternalSearchEnabled?.()) {
+          startupMessage += ' + EXTERNAL DISCOVERY (DexScreener + Jupiter)';
+        }
+      } catch (error) {
+        // Если метод недоступен, используем стандартное сообщение
+      }
+      
+      this.logger.info(startupMessage + '...');
 
       // 🔧 КРИТИЧЕСКИ ВАЖНО: ВЫПОЛНЯЕМ МИГРАЦИЮ ПЕРЕД ИНИЦИАЛИЗАЦИЕЙ БД
       await this.performDatabaseMigration();
@@ -807,13 +849,23 @@ class SmartMoneyBotRunner {
       // 🎯 НОВЫЙ: Периодическая отправка статистики агрегации
       this.startPositionAggregationReports();
 
+      // 🆕 УЛУЧШЕННОЕ логгирование с информацией о типе поиска
+      let discoveryType = 'INTERNAL (database analysis)';
+      try {
+        if (this.walletDiscovery.isExternalSearchEnabled?.()) {
+          discoveryType = 'EXTERNAL (DexScreener + Jupiter)';
+        }
+      } catch (error) {
+        // Если метод недоступен, используем internal
+      }
+
       this.logger.info('✅ OPTIMIZED Smart Money Bot started successfully + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS!');
       this.logger.info('📊 Real-time DEX monitoring active (OPTIMIZED)');
       this.logger.info('🔍 Smart Money flow analysis running (4h intervals)');
       this.logger.info('🎯 Advanced insider detection enabled (LIMITED)');
       this.logger.info('⚠️ Family wallet detection disabled');
       this.logger.info('🎯 Position splitting detection ENABLED');
-      this.logger.info('🚀 Wallet discovery: EVERY 48 HOURS (was 14 days)');
+      this.logger.info(`🚀 Wallet discovery: EVERY 48 HOURS (${discoveryType})`);
       this.logger.info('🤖 Telegram commands: ENABLED (/help for list)');
 
       process.on('SIGINT', () => this.shutdown());
@@ -1007,6 +1059,18 @@ class SmartMoneyBotRunner {
         `🔄 <b>OPTIMIZED Polling Mode</b> (${pollingStats.monitoredWallets}/20 wallets, 5min intervals)` : 
         '📡 <b>Real-time Webhooks</b>';
 
+      // 🆕 ДИНАМИЧЕСКАЯ информация о типе поиска
+      let discoveryInfo = '🔍 Wallet discovery: <b>Every 48 HOURS</b>';
+      try {
+        if (this.walletDiscovery.isExternalSearchEnabled?.()) {
+          discoveryInfo = '🌍 External discovery: <b>Every 48 HOURS (DexScreener + Jupiter)</b>';
+        } else {
+          discoveryInfo = '🔍 Internal discovery: <b>Every 48 HOURS (database analysis)</b>';
+        }
+      } catch (error) {
+        // Если метод недоступен, используем стандартную информацию
+      }
+
       await this.telegramNotifier.sendCycleLog(
         `🟢 <b>OPTIMIZED Smart Money Bot Online + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS!</b>\n\n` +
         `📊 Monitoring <code>${stats.active}</code> active wallets (<code>${stats.enabled}</code> enabled)\n` +
@@ -1021,7 +1085,7 @@ class SmartMoneyBotRunner {
         `🎯 Monitoring: ${monitoringMode}\n` +
         `📈 Flow analysis: <b>Every 4 hours (OPTIMIZED)</b>\n` +
         `🔥 Hot token detection: <b>Every 4 hours</b>\n` +
-        `🔍 Wallet discovery: <b>Every 48 HOURS (was 14 days) with RELAXED criteria</b>\n` +
+        `${discoveryInfo}\n` +
         `⚠️ Family detection: <b>Disabled</b>\n` +
         `🎯 Position splitting: <b>ENABLED for insider detection</b>\n\n` +
         `🚀 <b>API OPTIMIZATION ACTIVE:</b>\n` +
@@ -1111,7 +1175,7 @@ class SmartMoneyBotRunner {
     this.logger.info('🔄 OPTIMIZED Periodic Smart Money flow analysis started (4-hour intervals)');
   }
 
-  // 🔥 НОВЫЙ МЕТОД: DISCOVERY КАЖДЫЕ 48 ЧАСОВ ВМЕСТО 14 ДНЕЙ!
+  // 🔥 ИСПРАВЛЕННЫЙ МЕТОД: DISCOVERY КАЖДЫЕ 48 ЧАСОВ - ПРАВИЛЬНОЕ УПРАВЛЕНИЕ ТАЙМЕРАМИ
   private startWalletDiscoveryEvery48Hours(): void {
     const runWalletDiscovery = async () => {
       if (!this.isRunning) {
@@ -1120,7 +1184,17 @@ class SmartMoneyBotRunner {
       }
       
       try {
-        this.logger.info('🔍 Starting FREQUENT wallet discovery process (EVERY 48 HOURS with RELAXED criteria)...');
+        // 🆕 ДИНАМИЧЕСКОЕ логгирование на основе типа поиска
+        let discoveryType = 'FREQUENT wallet discovery process (EVERY 48 HOURS with RELAXED criteria)';
+        try {
+          if (this.walletDiscovery.isExternalSearchEnabled?.()) {
+            discoveryType = 'FREQUENT external wallet discovery (EVERY 48 HOURS via DexScreener + Jupiter)';
+          }
+        } catch (error) {
+          // Если метод недоступен, используем стандартное сообщение
+        }
+        
+        this.logger.info(`🔍 Starting ${discoveryType}...`);
         
         const discoveryResults = await this.walletDiscovery.discoverSmartWallets();
         
@@ -1187,24 +1261,27 @@ class SmartMoneyBotRunner {
       }
     };
 
-    // 🔥 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: запуск через 1 час, потом каждые 48 ЧАСОВ!
+    // 🔧 ИСПРАВЛЕНО: ПРАВИЛЬНОЕ УПРАВЛЕНИЕ ТАЙМЕРАМИ
     this.logger.info('⏰ Wallet discovery will start in 1 hour, then every 48 HOURS...');
     
-    // 🔧 ИСПРАВЛЕНИЕ: ПРАВИЛЬНОЕ ХРАНЕНИЕ TIMEOUT
+    // Первый запуск через 1 час
     const discoveryTimeout = setTimeout(async () => {
       this.logger.info('⏰ 1 hour passed, starting first 48-hour discovery cycle...');
       await runWalletDiscovery();
       
-      // 🔥 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: 14 дней → 48 ЧАСОВ!
+      // 🔥 КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: 14 дней → 48 ЧАСОВ!
+      // ✅ ИСПРАВЛЕНО: Интервал создается и сразу добавляется в массив
       const discoveryInterval = setInterval(async () => {
         this.logger.info('⏰ 48 hours passed, running periodic wallet discovery...');
         await runWalletDiscovery();
       }, 48 * 60 * 60 * 1000); // 48 ЧАСОВ вместо 14 дней!
       
+      // ✅ ИСПРАВЛЕНО: Интервал добавляется в массив сразу после создания
       this.intervalIds.push(discoveryInterval);
+      
     }, 60 * 60 * 1000); // 1 час
     
-    // 🔧 ИСПРАВЛЕНИЕ: ДОБАВЛЯЕМ TIMEOUT В ОТДЕЛЬНЫЙ МАССИВ
+    // ✅ ИСПРАВЛЕНО: Timeout добавляется в отдельный массив для корректной очистки
     this.timeoutIds.push(discoveryTimeout);
 
     this.logger.info('🔄 FREQUENT Periodic wallet discovery scheduled (48 HOURS instead of 14 days, up to 10 new wallets with RELAXED criteria)');
@@ -1296,7 +1373,7 @@ class SmartMoneyBotRunner {
     
     this.isRunning = false;
     
-    // 🔧 ИСПРАВЛЕНИЕ: ОЧИЩАЕМ ВСЕ INTERVALS И TIMEOUTS
+    // 🔧 ИСПРАВЛЕНО: ОЧИЩАЕМ ВСЕ INTERVALS И TIMEOUTS
     for (const intervalId of this.intervalIds) {
       clearInterval(intervalId);
     }
