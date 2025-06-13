@@ -1,4 +1,4 @@
-// src/services/SmartWalletLoader.ts - с УЛУЧШЕННЫМ ERROR HANDLING
+// src/services/SmartWalletLoader.ts - с УЛУЧШЕННЫМ ERROR HANDLING + АВТОЗАМЕНА
 import fs from 'fs';
 import path from 'path';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
@@ -60,196 +60,297 @@ export class SmartWalletLoader {
     this.configPath = path.join(process.cwd(), 'data', 'smart_wallets.json');
   }
 
-  // 🚀 HARDCODED кошельки - ВСЕГДА РАБОТАЮТ!
+  // 🚀 ОБНОВЛЕННЫЕ HARDCODED кошельки - ВАШИ 10 АКТУАЛЬНЫХ КОШЕЛЬКОВ!
   private getHardcodedWallets(): WalletConfig[] {
-  return [
-    {
-      address: "3NgFx68GWTcoreJyJear9yLxQBmjccXAYaUphq5h9PEJ",
-      category: "sniper",
-      nickname: "Alpha Sniper",
-      description: "High-performance sniper wallet with excellent timing",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 82.4,
-      totalPnL: 245000,
-      totalTrades: 89,
-      avgTradeSize: 12000,
-      maxTradeSize: 45000,
-      performanceScore: 88,
-      minTradeAlert: 2000,
-      priority: "high",
-      enabled: true
-    },
-    {
-      address: "G5nxEXuFMfV74DSnsrSatqCW32F34XUnBeq3PfDS7w5E",
-      category: "hunter",
-      nickname: "Token Hunter Pro",
-      description: "Professional token hunter with strong analytics",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 76.8,
-      totalPnL: 189000,
-      totalTrades: 142,
-      avgTradeSize: 8500,
-      maxTradeSize: 28000,
-      performanceScore: 84,
-      minTradeAlert: 3000,
-      priority: "high",
-      enabled: true
-    },
-    {
-      address: "9peW76TTRt5dp4wiQid8dw2pmxpwpN5eXZ15bmLBNCsx",
-      category: "trader",
-      nickname: "Momentum Trader",
-      description: "Skilled momentum trader with consistent profits",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 71.2,
-      totalPnL: 165000,
-      totalTrades: 97,
-      avgTradeSize: 15000,
-      maxTradeSize: 65000,
-      performanceScore: 81,
-      minTradeAlert: 5000,
-      priority: "high",
-      enabled: true
-    },
-    {
-      address: "4Bxf1mCFoaQmCxxB7obV4hjfYJqkCXVQVCTRkjT1YQuL",
-      category: "sniper",
-      nickname: "Quick Strike",
-      description: "Fast execution sniper for new launches",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 79.1,
-      totalPnL: 134000,
-      totalTrades: 76,
-      avgTradeSize: 9800,
-      maxTradeSize: 35000,
-      performanceScore: 83,
-      minTradeAlert: 2500,
-      priority: "high",
-      enabled: true
-    },
-    {
-      address: "5nFGHVWZzsGQuucx9yuMyMFNb8MxVe5BZq6UnpMzkoCv",
-      category: "hunter",
-      nickname: "Gem Hunter",
-      description: "Expert at finding hidden gems early",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 74.6,
-      totalPnL: 156000,
-      totalTrades: 118,
-      avgTradeSize: 7200,
-      maxTradeSize: 25000,
-      performanceScore: 82,
-      minTradeAlert: 3500,
-      priority: "medium",
-      enabled: true
-    },
-    {
-      address: "4v7nGvhrYgHxwkeVAUijm3HPaFLBA133Z3SBrxsFWjzD",
-      category: "trader",
-      nickname: "Volume Trader",
-      description: "High-volume trader with solid risk management",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 68.3,
-      totalPnL: 198000,
-      totalTrades: 156,
-      avgTradeSize: 18500,
-      maxTradeSize: 85000,
-      performanceScore: 79,
-      minTradeAlert: 8000,
-      priority: "medium",
-      enabled: true
-    },
-    {
-      address: "C68a6RCGLiPskbPYtAcsCjhG8tfTWYcoB4JjCrXFdqyo",
-      category: "sniper",
-      nickname: "Precision Sniper",
-      description: "Highly accurate sniper with low miss rate",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 85.7,
-      totalPnL: 112000,
-      totalTrades: 63,
-      avgTradeSize: 11500,
-      maxTradeSize: 32000,
-      performanceScore: 87,
-      minTradeAlert: 2000,
-      priority: "high",
-      enabled: true
-    },
-    {
-      address: "3KNCdquQuPBq6ZWChRJr8jGpkoyZ5LurLCt6sNJJMxbq",
-      category: "hunter",
-      nickname: "DeFi Hunter",
-      description: "Specialized in DeFi token opportunities",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 72.9,
-      totalPnL: 143000,
-      totalTrades: 101,
-      avgTradeSize: 9200,
-      maxTradeSize: 38000,
-      performanceScore: 80,
-      minTradeAlert: 4000,
-      priority: "medium",
-      enabled: true
-    },
-    {
-      address: "HAkvH2WfamhcoyvUF7X9kqSvzwcnvmGJbNUw9QTfhWh5",
-      category: "trader",
-      nickname: "Smart Whale",
-      description: "Large position trader with strategic approach",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 66.8,
-      totalPnL: 287000,
-      totalTrades: 92,
-      avgTradeSize: 28000,
-      maxTradeSize: 120000,
-      performanceScore: 78,
-      minTradeAlert: 15000,
-      priority: "medium",
-      enabled: true
-    },
-    {
-      address: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC",
-      category: "hunter",
-      nickname: "Trend Hunter",
-      description: "Expert at catching trending tokens early",
-      addedBy: "manual",
-      addedAt: "2025-06-13T09:00:00.000Z",
-      verified: true,
-      winRate: 77.3,
-      totalPnL: 167000,
-      totalTrades: 125,
-      avgTradeSize: 8800,
-      maxTradeSize: 29000,
-      performanceScore: 83,
-      minTradeAlert: 3000,
-      priority: "medium",
-      enabled: true
-    }
-  ];
-}
+    return [
+      {
+        address: "3NgFx68GWTcoreJyJear9yLxQBmjccXAYaUphq5h9PEJ",
+        category: "sniper",
+        nickname: "Alpha Sniper",
+        description: "High-performance sniper wallet with excellent timing",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 82.4,
+        totalPnL: 245000,
+        totalTrades: 89,
+        avgTradeSize: 12000,
+        maxTradeSize: 45000,
+        performanceScore: 88,
+        minTradeAlert: 2000,
+        priority: "high",
+        enabled: true
+      },
+      {
+        address: "G5nxEXuFMfV74DSnsrSatqCW32F34XUnBeq3PfDS7w5E",
+        category: "hunter",
+        nickname: "Token Hunter Pro",
+        description: "Professional token hunter with strong analytics",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 76.8,
+        totalPnL: 189000,
+        totalTrades: 142,
+        avgTradeSize: 8500,
+        maxTradeSize: 28000,
+        performanceScore: 84,
+        minTradeAlert: 3000,
+        priority: "high",
+        enabled: true
+      },
+      {
+        address: "9peW76TTRt5dp4wiQid8dw2pmxpwpN5eXZ15bmLBNCsx",
+        category: "trader",
+        nickname: "Momentum Trader",
+        description: "Skilled momentum trader with consistent profits",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 71.2,
+        totalPnL: 165000,
+        totalTrades: 97,
+        avgTradeSize: 15000,
+        maxTradeSize: 65000,
+        performanceScore: 81,
+        minTradeAlert: 5000,
+        priority: "high",
+        enabled: true
+      },
+      {
+        address: "4Bxf1mCFoaQmCxxB7obV4hjfYJqkCXVQVCTRkjT1YQuL",
+        category: "sniper",
+        nickname: "Quick Strike",
+        description: "Fast execution sniper for new launches",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 79.1,
+        totalPnL: 134000,
+        totalTrades: 76,
+        avgTradeSize: 9800,
+        maxTradeSize: 35000,
+        performanceScore: 83,
+        minTradeAlert: 2500,
+        priority: "high",
+        enabled: true
+      },
+      {
+        address: "5nFGHVWZzsGQuucx9yuMyMFNb8MxVe5BZq6UnpMzkoCv",
+        category: "hunter",
+        nickname: "Gem Hunter",
+        description: "Expert at finding hidden gems early",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 74.6,
+        totalPnL: 156000,
+        totalTrades: 118,
+        avgTradeSize: 7200,
+        maxTradeSize: 25000,
+        performanceScore: 82,
+        minTradeAlert: 3500,
+        priority: "medium",
+        enabled: true
+      },
+      {
+        address: "4v7nGvhrYgHxwkeVAUijm3HPaFLBA133Z3SBrxsFWjzD",
+        category: "trader",
+        nickname: "Volume Trader",
+        description: "High-volume trader with solid risk management",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 68.3,
+        totalPnL: 198000,
+        totalTrades: 156,
+        avgTradeSize: 18500,
+        maxTradeSize: 85000,
+        performanceScore: 79,
+        minTradeAlert: 8000,
+        priority: "medium",
+        enabled: true
+      },
+      {
+        address: "C68a6RCGLiPskbPYtAcsCjhG8tfTWYcoB4JjCrXFdqyo",
+        category: "sniper",
+        nickname: "Precision Sniper",
+        description: "Highly accurate sniper with low miss rate",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 85.7,
+        totalPnL: 112000,
+        totalTrades: 63,
+        avgTradeSize: 11500,
+        maxTradeSize: 32000,
+        performanceScore: 87,
+        minTradeAlert: 2000,
+        priority: "high",
+        enabled: true
+      },
+      {
+        address: "3KNCdquQuPBq6ZWChRJr8jGpkoyZ5LurLCt6sNJJMxbq",
+        category: "hunter",
+        nickname: "DeFi Hunter",
+        description: "Specialized in DeFi token opportunities",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 72.9,
+        totalPnL: 143000,
+        totalTrades: 101,
+        avgTradeSize: 9200,
+        maxTradeSize: 38000,
+        performanceScore: 80,
+        minTradeAlert: 4000,
+        priority: "medium",
+        enabled: true
+      },
+      {
+        address: "HAkvH2WfamhcoyvUF7X9kqSvzwcnvmGJbNUw9QTfhWh5",
+        category: "trader",
+        nickname: "Smart Whale",
+        description: "Large position trader with strategic approach",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 66.8,
+        totalPnL: 287000,
+        totalTrades: 92,
+        avgTradeSize: 28000,
+        maxTradeSize: 120000,
+        performanceScore: 78,
+        minTradeAlert: 15000,
+        priority: "medium",
+        enabled: true
+      },
+      {
+        address: "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC",
+        category: "hunter",
+        nickname: "Trend Hunter",
+        description: "Expert at catching trending tokens early",
+        addedBy: "manual",
+        addedAt: "2025-06-13T09:00:00.000Z",
+        verified: true,
+        winRate: 77.3,
+        totalPnL: 167000,
+        totalTrades: 125,
+        avgTradeSize: 8800,
+        maxTradeSize: 29000,
+        performanceScore: 83,
+        minTradeAlert: 3000,
+        priority: "medium",
+        enabled: true
+      }
+    ];
+  }
 
-  // 🚀 УМНАЯ загрузка: сначала файл, потом hardcoded с УЛУЧШЕННЫМ ERROR HANDLING
+  // 🚀 НОВЫЙ МЕТОД: Полная очистка всех существующих кошельков
+  async clearAllExistingWallets(): Promise<void> {
+    try {
+      this.logger.info('🧹 Clearing all existing wallets from database...');
+      
+      // Используем новый публичный метод из SmartMoneyDatabase
+      const clearedCount = await this.smDatabase.clearAllWallets();
+
+      this.logger.info(`🧹 Cleared ${clearedCount} existing wallets`);
+
+    } catch (error) {
+      this.logger.error('❌ Error clearing existing wallets:', error);
+    }
+  }
+
+  // 🚀 НОВЫЙ МЕТОД: Принудительная замена кошельков
+  async forceReplaceAllWallets(): Promise<boolean> {
+    try {
+      this.logger.info(`🔄 Force replacing all wallets with current hardcoded set...`);
+
+      // 1. Очищаем все существующие кошельки
+      await this.clearAllExistingWallets();
+
+      // 2. Получаем актуальные кошельки
+      const newWallets = this.getHardcodedWallets();
+
+      // 3. Создаем новый конфиг
+      this.config = this.createDefaultConfigWithWallets(newWallets);
+      await this.saveConfig();
+
+      // 4. Загружаем новые кошельки в БД
+      let loadedCount = 0;
+      for (const walletConfig of newWallets) {
+        try {
+          const smartWallet: SmartMoneyWallet = this.createSmartWalletFromConfig(walletConfig);
+          const dbConfig = this.createDbConfigFromWalletConfig(walletConfig);
+          await this.smDatabase.saveSmartWallet(smartWallet, dbConfig);
+          loadedCount++;
+          this.logger.info(`✅ Loaded wallet: ${walletConfig.nickname}`);
+        } catch (error) {
+          this.logger.error(`❌ Error loading wallet ${walletConfig.nickname}:`, error);
+        }
+      }
+
+      this.logger.info(`✅ Successfully replaced all wallets: ${loadedCount} loaded`);
+      return true;
+
+    } catch (error) {
+      this.logger.error('❌ Error force replacing wallets:', error);
+      return false;
+    }
+  }
+
+  // 🚀 НОВЫЙ МЕТОД: Проверка и автоматическое исправление кошельков
+  async autoFixWalletsIfNeeded(): Promise<boolean> {
+    try {
+      this.logger.info('🔧 Checking if wallet auto-fix is needed...');
+
+      // Проверяем количество кошельков в БД
+      const dbWallets = await this.smDatabase.getAllActiveSmartWallets();
+      this.logger.info(`📊 Found ${dbWallets.length} wallets in database`);
+
+      // Если кошельков меньше 8 (ожидаем 10), значит что-то не так
+      if (dbWallets.length < 8) {
+        this.logger.warn(`⚠️ Only ${dbWallets.length} wallets found, expected 10. Force replacing...`);
+        return await this.forceReplaceAllWallets();
+      }
+
+      // Проверяем, есть ли наши актуальные кошельки
+      const hardcodedWallets = this.getHardcodedWallets();
+      const hardcodedAddresses = new Set(hardcodedWallets.map(w => w.address));
+      const dbAddresses = new Set(dbWallets.map(w => w.address));
+
+      let matchCount = 0;
+      for (const address of hardcodedAddresses) {
+        if (dbAddresses.has(address)) {
+          matchCount++;
+        }
+      }
+
+      // Если меньше 8 из 10 кошельков совпадают, заменяем
+      if (matchCount < 8) {
+        this.logger.warn(`⚠️ Only ${matchCount}/10 expected wallets found. Force replacing...`);
+        return await this.forceReplaceAllWallets();
+      }
+
+      this.logger.info('✅ Wallets are up to date, no fix needed');
+      return false;
+
+    } catch (error) {
+      this.logger.error('❌ Error in wallet auto-fix check:', error);
+      return false;
+    }
+  }
+
+  // 🚀 УЛУЧШЕННАЯ загрузка с автоматической проверкой
   async loadWalletsFromConfig(): Promise<number> {
     try {
       this.logger.info('📁 Loading Smart Money wallets from config...');
+
+      // 🚀 НОВОЕ: Автоматическая проверка и исправление при загрузке
+      const wasFixed = await this.autoFixWalletsIfNeeded();
+      if (wasFixed) {
+        this.logger.info('🔧 Wallets were auto-fixed, using current hardcoded set');
+      }
 
       // 🔒 УЛУЧШЕННАЯ ЗАГРУЗКА ИЗ ФАЙЛА С ЗАЩИТОЙ ОТ NULL
       try {
@@ -677,7 +778,7 @@ export class SmartWalletLoader {
     }
   }
 
-  // 🔒 НОВЫЕ МЕТОДЫ ДЛЯ ВАЛИДАЦИИ И БЕЗОПАСНОСТИ
+  // 🔒 МЕТОДЫ ДЛЯ ВАЛИДАЦИИ И БЕЗОПАСНОСТИ
 
   private validateConfig(config: any): boolean {
     try {

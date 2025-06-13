@@ -1,4 +1,4 @@
-// src/services/SmartMoneyDatabase.ts - БЕЗ Family Detection
+// src/services/SmartMoneyDatabase.ts - БЕЗ Family Detection + НОВЫЕ МЕТОДЫ ДЛЯ АВТОЗАМЕНЫ
 import BetterSqlite3 from 'better-sqlite3';
 import { Logger } from '../utils/Logger';
 import { SmartMoneyWallet, TokenSwap } from '../types';
@@ -527,6 +527,124 @@ export class SmartMoneyDatabase {
       metrics.performanceScore || null,
       address
     );
+  }
+
+  // 🚀 НОВЫЕ МЕТОДЫ ДЛЯ АВТОЗАМЕНЫ КОШЕЛЬКОВ
+  
+  /**
+   * Очищает все кошельки из базы данных
+   * @returns количество удаленных кошельков
+   */
+  async clearAllWallets(): Promise<number> {
+    try {
+      // Получаем количество кошельков перед удалением
+      const countRow = this.db.prepare('SELECT COUNT(*) as count FROM smart_money_wallets').get() as any;
+      const walletCount = countRow.count;
+
+      // Удаляем все кошельки
+      this.db.prepare('DELETE FROM smart_money_wallets').run();
+
+      this.logger.info(`🧹 Cleared ${walletCount} wallets from database`);
+      return walletCount;
+    } catch (error) {
+      this.logger.error('❌ Error clearing all wallets:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Получает все адреса кошельков из базы данных
+   * @returns массив адресов кошельков
+   */
+  async getAllWalletAddresses(): Promise<string[]> {
+    try {
+      const rows = this.db.prepare('SELECT address FROM smart_money_wallets').all() as any[];
+      return rows.map(row => row.address);
+    } catch (error) {
+      this.logger.error('❌ Error getting wallet addresses:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Получает общее количество кошельков в базе данных
+   * @returns количество кошельков
+   */
+  async getWalletCount(): Promise<number> {
+    try {
+      const row = this.db.prepare('SELECT COUNT(*) as count FROM smart_money_wallets').get() as any;
+      return row.count;
+    } catch (error) {
+      this.logger.error('❌ Error getting wallet count:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Проверяет существование кошелька по адресу
+   * @param address адрес кошелька для проверки
+   * @returns true если кошелек существует, false если нет
+   */
+  async walletExists(address: string): Promise<boolean> {
+    try {
+      const row = this.db.prepare('SELECT 1 FROM smart_money_wallets WHERE address = ? LIMIT 1').get(address);
+      return !!row;
+    } catch (error) {
+      this.logger.error('❌ Error checking wallet existence:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Получает детальную информацию о кошельках для диагностики
+   * @returns объект с информацией о состоянии базы данных
+   */
+  async getDiagnosticInfo(): Promise<{
+    totalWallets: number;
+    activeWallets: number;
+    enabledWallets: number;
+    recentAddresses: string[];
+    oldestAddresses: string[];
+  }> {
+    try {
+      const totalRow = this.db.prepare('SELECT COUNT(*) as count FROM smart_money_wallets').get() as any;
+      const activeRow = this.db.prepare('SELECT COUNT(*) as count FROM smart_money_wallets WHERE is_active = 1').get() as any;
+      
+      // Проверяем наличие колонки enabled
+      const tableInfo = this.db.prepare("PRAGMA table_info(smart_money_wallets)").all() as any[];
+      const hasEnabledColumn = tableInfo.some((col: any) => col.name === 'enabled');
+      
+      let enabledCount = 0;
+      if (hasEnabledColumn) {
+        const enabledRow = this.db.prepare('SELECT COUNT(*) as count FROM smart_money_wallets WHERE enabled = 1').get() as any;
+        enabledCount = enabledRow.count;
+      }
+
+      // Получаем последние добавленные адреса
+      const recentRows = this.db.prepare(`
+        SELECT address FROM smart_money_wallets 
+        ORDER BY created_at DESC, address DESC 
+        LIMIT 5
+      `).all() as any[];
+      
+      // Получаем самые старые адреса
+      const oldestRows = this.db.prepare(`
+        SELECT address FROM smart_money_wallets 
+        ORDER BY created_at ASC, address ASC 
+        LIMIT 5
+      `).all() as any[];
+
+      return {
+        totalWallets: totalRow.count,
+        activeWallets: activeRow.count,
+        enabledWallets: enabledCount,
+        recentAddresses: recentRows.map(row => row.address),
+        oldestAddresses: oldestRows.map(row => row.address)
+      };
+    } catch (error) {
+      this.logger.error('❌ Error getting diagnostic info:', error);
+      throw error;
+    }
   }
 
   private mapRowToWallet(row: any): SmartMoneyWallet {
