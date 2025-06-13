@@ -1,4 +1,4 @@
-// src/services/SmartMoneyDatabase.ts - БЕЗ Family Detection + НОВЫЕ МЕТОДЫ ДЛЯ АВТОЗАМЕНЫ
+// src/services/SmartMoneyDatabase.ts - БЕЗ Family Detection + НОВЫЕ МЕТОДЫ ДЛЯ АВТОЗАМЕНЫ + ИСПРАВЛЕНА FOREIGN KEY ПРОБЛЕМА
 import BetterSqlite3 from 'better-sqlite3';
 import { Logger } from '../utils/Logger';
 import { SmartMoneyWallet, TokenSwap } from '../types';
@@ -69,7 +69,7 @@ export class SmartMoneyDatabase {
           wallet_win_rate REAL,
           wallet_total_trades INTEGER,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (wallet_address) REFERENCES smart_money_wallets(address)
+          FOREIGN KEY (wallet_address) REFERENCES smart_money_wallets(address) ON DELETE CASCADE
         );
 
         /*
@@ -529,10 +529,10 @@ export class SmartMoneyDatabase {
     );
   }
 
-  // 🚀 НОВЫЕ МЕТОДЫ ДЛЯ АВТОЗАМЕНЫ КОШЕЛЬКОВ
+  // 🚀 НОВЫЕ МЕТОДЫ ДЛЯ АВТОЗАМЕНЫ КОШЕЛЬКОВ - ИСПРАВЛЕНЫ ДЛЯ FOREIGN KEY
   
   /**
-   * Очищает все кошельки из базы данных
+   * ✅ ИСПРАВЛЕНО: Очищает все кошельки из базы данных с правильным порядком удаления
    * @returns количество удаленных кошельков
    */
   async clearAllWallets(): Promise<number> {
@@ -541,15 +541,101 @@ export class SmartMoneyDatabase {
       const countRow = this.db.prepare('SELECT COUNT(*) as count FROM smart_money_wallets').get() as any;
       const walletCount = countRow.count;
 
-      // Удаляем все кошельки
+      // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: СНАЧАЛА удаляем связанные транзакции
+      const transactionCountRow = this.db.prepare('SELECT COUNT(*) as count FROM smart_money_transactions').get() as any;
+      const transactionCount = transactionCountRow.count;
+      
+      this.db.prepare('DELETE FROM smart_money_transactions').run();
+      this.logger.info(`🧹 Cleared ${transactionCount} transactions from database`);
+
+      // ✅ ПОТОМ удаляем кошельки
       this.db.prepare('DELETE FROM smart_money_wallets').run();
 
-      this.logger.info(`🧹 Cleared ${walletCount} wallets from database`);
+      this.logger.info(`🧹 Cleared ${walletCount} wallets and their transactions from database`);
       return walletCount;
     } catch (error) {
       this.logger.error('❌ Error clearing all wallets:', error);
       throw error;
     }
+  }
+
+  /**
+   * 🚀 НОВЫЙ МЕТОД: Безопасная замена всех кошельков через транзакцию
+   * @param newWallets новые кошельки для замены
+   */
+  async safeReplaceAllWallets(newWallets: SmartMoneyWallet[], configs?: any[]): Promise<void> {
+    const transaction = this.db.transaction(() => {
+      try {
+        // 1. Удаляем связанные транзакции
+        const transactionResult = this.db.prepare('DELETE FROM smart_money_transactions').run();
+        this.logger.info(`🧹 Cleared ${transactionResult.changes} transactions`);
+        
+        // 2. Удаляем кошельки
+        const walletResult = this.db.prepare('DELETE FROM smart_money_wallets').run();
+        this.logger.info(`🧹 Cleared ${walletResult.changes} wallets`);
+        
+        // 3. Добавляем новые кошельки
+        for (let i = 0; i < newWallets.length; i++) {
+          const wallet = newWallets[i];
+          const config = configs?.[i];
+          
+          // Используем существующий метод saveSmartWallet
+          const stmt = this.db.prepare(`
+            INSERT INTO smart_money_wallets (
+              address, category, nickname, description,
+              win_rate, total_pnl, total_trades, avg_trade_size, max_trade_size, min_trade_size, performance_score,
+              sharpe_ratio, max_drawdown, volume_score, early_entry_rate, avg_hold_time,
+              min_trade_alert, priority, enabled,
+              is_active, verified, last_active_at,
+              is_family_member, family_addresses, coordination_score, stealth_level,
+              added_by, added_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+          `);
+
+          const normalizedAddedBy = config?.addedBy === 'placeholder' ? 'discovery' : (config?.addedBy || 'manual');
+          const safeEnabled = config?.verified !== undefined ? (config.verified ? 1 : 0) : 0;
+
+          stmt.run(
+            wallet.address,
+            wallet.category,
+            config?.nickname || `${wallet.category.charAt(0).toUpperCase() + wallet.category.slice(1)} ${wallet.address.slice(0, 8)}`,
+            config?.description || `Автоматически добавленный ${wallet.category} кошелек`,
+            wallet.winRate,
+            wallet.totalPnL,
+            wallet.totalTrades,
+            wallet.avgTradeSize,
+            wallet.maxTradeSize,
+            wallet.minTradeSize,
+            wallet.performanceScore,
+            wallet.sharpeRatio || null,
+            wallet.maxDrawdown || null,
+            wallet.volumeScore || null,
+            wallet.earlyEntryRate || null,
+            wallet.avgHoldTime || null,
+            config?.minTradeAlert || (wallet.category === 'trader' ? 15000 : wallet.category === 'hunter' ? 5000 : 3000),
+            config?.priority || (wallet.performanceScore > 85 ? 'high' : 'medium'),
+            1, // enabled
+            wallet.isActive ? 1 : 0,
+            safeEnabled,
+            wallet.lastActiveAt.toISOString(),
+            0, // is_family_member
+            null, // family_addresses
+            null, // coordination_score
+            null, // stealth_level
+            normalizedAddedBy,
+            new Date().toISOString()
+          );
+        }
+        
+        this.logger.info(`✅ Successfully replaced with ${newWallets.length} new wallets`);
+      } catch (error) {
+        this.logger.error('❌ Error in safe wallet replacement:', error);
+        throw error;
+      }
+    });
+    
+    // Выполняем транзакцию
+    transaction();
   }
 
   /**

@@ -1,4 +1,4 @@
-// src/services/SmartWalletLoader.ts - с УЛУЧШЕННЫМ ERROR HANDLING + АВТОЗАМЕНА
+// src/services/SmartWalletLoader.ts - с УЛУЧШЕННЫМ ERROR HANDLING + АВТОЗАМЕНА + ИСПРАВЛЕНА FOREIGN KEY ПРОБЛЕМА
 import fs from 'fs';
 import path from 'path';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
@@ -246,51 +246,42 @@ export class SmartWalletLoader {
     ];
   }
 
-  // 🚀 НОВЫЙ МЕТОД: Полная очистка всех существующих кошельков
+  // ✅ ИСПРАВЛЕННЫЙ МЕТОД: Полная очистка всех существующих кошельков
   async clearAllExistingWallets(): Promise<void> {
     try {
       this.logger.info('🧹 Clearing all existing wallets from database...');
       
-      // Используем новый публичный метод из SmartMoneyDatabase
+      // ✅ Используем исправленный метод из SmartMoneyDatabase
       const clearedCount = await this.smDatabase.clearAllWallets();
 
       this.logger.info(`🧹 Cleared ${clearedCount} existing wallets`);
 
     } catch (error) {
       this.logger.error('❌ Error clearing existing wallets:', error);
+      throw error; // Пробрасываем ошибку дальше
     }
   }
 
-  // 🚀 НОВЫЙ МЕТОД: Принудительная замена кошельков
+  // ✅ ИСПРАВЛЕННЫЙ МЕТОД: Принудительная замена кошельков через безопасную транзакцию
   async forceReplaceAllWallets(): Promise<boolean> {
     try {
       this.logger.info(`🔄 Force replacing all wallets with current hardcoded set...`);
 
-      // 1. Очищаем все существующие кошельки
-      await this.clearAllExistingWallets();
-
-      // 2. Получаем актуальные кошельки
+      // 1. Получаем актуальные кошельки
       const newWallets = this.getHardcodedWallets();
+      
+      // 2. Преобразуем в SmartMoneyWallet объекты
+      const smartWallets: SmartMoneyWallet[] = newWallets.map(config => this.createSmartWalletFromConfig(config));
+      const dbConfigs = newWallets.map(config => this.createDbConfigFromWalletConfig(config));
 
-      // 3. Создаем новый конфиг
+      // ✅ 3. Используем безопасную замену через транзакцию
+      await this.smDatabase.safeReplaceAllWallets(smartWallets, dbConfigs);
+
+      // 4. Создаем новый конфиг
       this.config = this.createDefaultConfigWithWallets(newWallets);
       await this.saveConfig();
 
-      // 4. Загружаем новые кошельки в БД
-      let loadedCount = 0;
-      for (const walletConfig of newWallets) {
-        try {
-          const smartWallet: SmartMoneyWallet = this.createSmartWalletFromConfig(walletConfig);
-          const dbConfig = this.createDbConfigFromWalletConfig(walletConfig);
-          await this.smDatabase.saveSmartWallet(smartWallet, dbConfig);
-          loadedCount++;
-          this.logger.info(`✅ Loaded wallet: ${walletConfig.nickname}`);
-        } catch (error) {
-          this.logger.error(`❌ Error loading wallet ${walletConfig.nickname}:`, error);
-        }
-      }
-
-      this.logger.info(`✅ Successfully replaced all wallets: ${loadedCount} loaded`);
+      this.logger.info(`✅ Successfully replaced all wallets: ${newWallets.length} loaded`);
       return true;
 
     } catch (error) {

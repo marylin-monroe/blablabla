@@ -1,4 +1,4 @@
-// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ + 48h DISCOVERY - С АВТОМАТИЧЕСКОЙ МИГРАЦИЕЙ БД + АВТОЗАМЕНА КОШЕЛЬКОВ
+// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ + 48h DISCOVERY - С АВТОМАТИЧЕСКОЙ МИГРАЦИЕЙ БД + ИСПРАВЛЕНА FOREIGN KEY ПРОБЛЕМА
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -257,26 +257,36 @@ class SmartMoneyBotRunner {
     return fallbackUrl;
   }
 
-  // 🚀 НОВЫЙ МЕТОД: Автоматическое исправление синхронизации кошельков
+  // ✅ ИСПРАВЛЕННЫЙ МЕТОД: Автоматическое исправление синхронизации кошельков
   private async autoFixWalletSync(): Promise<void> {
     try {
       this.logger.info('🔧 Auto-fixing wallet sync...');
 
+      // ✅ Диагностика перед исправлением
+      try {
+        const diagnostics = await this.smDatabase.getDiagnosticInfo();
+        this.logger.info('📊 Current DB state:', diagnostics);
+      } catch (diagError) {
+        this.logger.warn('⚠️ Could not get diagnostics, continuing...', diagError);
+      }
+
       // Проверяем количество кошельков в БД
-      const dbWallets = await this.smDatabase.getAllActiveSmartWallets();
-      this.logger.info(`📊 Found ${dbWallets.length} wallets in database`);
+      const dbCount = await this.smDatabase.getWalletCount();
+      this.logger.info(`📊 Found ${dbCount} wallets in database`);
 
       // Если кошельков меньше 8 (ожидаем 10), значит что-то не так
-      if (dbWallets.length < 8) {
+      if (dbCount < 8) {
         this.logger.warn('⚠️ Detected insufficient wallets, forcing reload...');
         
-        // Полная очистка и перезагрузка через SmartWalletLoader
+        // ✅ Полная очистка и перезагрузка через SmartWalletLoader с исправленной Foreign Key проблемой
         const success = await this.smartWalletLoader.forceReplaceAllWallets();
         if (success) {
           this.logger.info('✅ Wallets force replaced successfully');
         } else {
           this.logger.error('❌ Failed to force replace wallets');
         }
+      } else {
+        this.logger.info('✅ Sufficient wallets found, no replacement needed');
       }
 
       // Дополнительная проверка: если конфиг файл содержит старые данные
@@ -284,6 +294,7 @@ class SmartMoneyBotRunner {
 
     } catch (error) {
       this.logger.error('❌ Error in auto wallet sync fix:', error);
+      // Не бросаем ошибку дальше, чтобы бот продолжил работу
     }
   }
 
@@ -302,7 +313,7 @@ class SmartMoneyBotRunner {
             return; // Конфиг уже нормальный
           }
         } catch (error) {
-          this.logger.warn('⚠️ Config file corrupted, recreating...');
+          this.logger.warn('⚠️ Config file corrupted, recreating...', error);
         }
       }
 
@@ -519,9 +530,13 @@ class SmartMoneyBotRunner {
 
       // Создаем backup если файл существует
       if (configExists) {
-        const backupPath = configPath.replace('.json', `_backup_${Date.now()}.json`);
-        fs.copyFileSync(configPath, backupPath);
-        this.logger.info(`💾 Config backup saved: ${backupPath}`);
+        try {
+          const backupPath = configPath.replace('.json', `_backup_${Date.now()}.json`);
+          fs.copyFileSync(configPath, backupPath);
+          this.logger.info(`💾 Config backup saved: ${backupPath}`);
+        } catch (backupError) {
+          this.logger.warn('⚠️ Failed to create backup, continuing...', backupError);
+        }
       }
 
       // Записываем новый конфиг
@@ -530,6 +545,7 @@ class SmartMoneyBotRunner {
 
     } catch (error) {
       this.logger.error('❌ Error creating config file:', error);
+      // Не бросаем ошибку дальше, чтобы не сломать запуск
     }
   }
 
@@ -545,7 +561,7 @@ class SmartMoneyBotRunner {
       await this.smDatabase.init();
       this.logger.info('✅ Databases initialized (with position aggregation support)');
 
-      // 🚀 НОВОЕ: Автоматическая проверка и замена кошельков при старте
+      // ✅ ИСПРАВЛЕННОЕ: Автоматическая проверка и замена кошельков при старте
       await this.autoFixWalletSync();
 
       const loadedWallets = await this.smartWalletLoader.loadWalletsFromConfig();
