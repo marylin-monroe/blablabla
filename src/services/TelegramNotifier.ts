@@ -1,4 +1,4 @@
-// src/services/TelegramNotifier.ts - ПОЛНАЯ ВЕРСИЯ + INSIDER DETECTOR + MULTIPROVIDER + ВСЕ МЕТОДЫ
+// src/services/TelegramNotifier.ts - ПОЛНАЯ ВЕРСИЯ + INSIDER DETECTOR + MULTIPROVIDER + ВСЕ МЕТОДЫ + TELEGRAM КОМАНДЫ
 import TelegramBot from 'node-telegram-bot-api';
 import { TokenSwap, WalletInfo, SmartMoneyReport, InsiderAlert, SmartMoneyFlow, HotNewToken, SmartMoneySwap, PositionAggregation, ProviderStats, MultiProviderMetrics, PositionAggregationStats } from '../types';
 import { Logger } from '../utils/Logger';
@@ -86,24 +86,442 @@ interface MultiProviderHealthReport {
   }>;
 }
 
+// 🆕 ИНТЕРФЕЙСЫ ДЛЯ TELEGRAM КОМАНД
+interface StatsData {
+  walletStats: any;
+  dbStats: any;
+  pollingStats: any;
+  aggregationStats: any;
+  loaderStats: any;
+  notificationStats: any;
+  webhookMode: 'polling' | 'webhook';
+  uptime: number;
+}
+
+interface WalletsData {
+  wallets: any[];
+  stats: any;
+  totalCount: number;
+}
+
+interface TopTokenData {
+  tokenAddress: string;
+  tokenSymbol: string;
+  tokenName: string;
+  volume24h: number;
+  swapCount: number;
+  uniqueWallets: number;
+  priceChange24h: number;
+}
+
+interface PositionsData {
+  totalPositions: number;
+  highSuspicionPositions: number;
+  totalValueUSD: number;
+  avgSuspicionScore: number;
+  activeMonitoring: number;
+  detectedToday: number;
+  alertsSentToday: number;
+  riskDistribution: {
+    high: number;
+    medium: number;
+    low: number;
+  };
+  topWalletsByPositions: Array<{
+    walletAddress: string;
+    positionCount: number;
+    totalValueUSD: number;
+  }>;
+}
+
+interface DiscoveryData {
+  totalAnalyzed: number;
+  newWallets: number;
+  updatedWallets: number;
+  smartMoneyFound: number;
+}
+
 export class TelegramNotifier {
   private bot: TelegramBot;
   private userId: string;
   private logger: Logger;
+  private commandHandlers: Map<string, () => Promise<void>> = new Map();
   private stats = {
     totalSent: 0,
     positionAlerts: 0,
     insiderAlerts: 0,
     smartMoneySwaps: 0,
     multiProviderReports: 0,
+    commandsProcessed: 0,
     errorsSent: 0,
     lastMessageTime: new Date()
   };
 
   constructor(token: string, userId: string) {
-    this.bot = new TelegramBot(token, { polling: false });
+    // 🆕 ВКЛЮЧАЕМ POLLING ДЛЯ ОБРАБОТКИ КОМАНД
+    this.bot = new TelegramBot(token, { polling: true });
     this.userId = userId;
     this.logger = Logger.getInstance();
+
+    // 🆕 НАСТРОЙКА БАЗОВЫХ ОБРАБОТЧИКОВ
+    this.setupBaseHandlers();
+  }
+
+  // 🆕 БАЗОВЫЕ ОБРАБОТЧИКИ
+  private setupBaseHandlers(): void {
+    this.bot.on('message', (msg) => {
+      // Обрабатываем только сообщения от нужного пользователя
+      if (msg.from?.id.toString() !== this.userId) {
+        return;
+      }
+
+      // Обрабатываем только команды (начинающиеся с /)
+      if (msg.text && msg.text.startsWith('/')) {
+        const command = msg.text.split(' ')[0];
+        const handler = this.commandHandlers.get(command);
+        
+        if (handler) {
+          this.stats.commandsProcessed++;
+          handler().catch(error => {
+            this.logger.error(`Error handling command ${command}:`, error);
+            this.sendCommandError(command.substring(1), error);
+          });
+        } else {
+          // Неизвестная команда
+          this.sendMessage(`❓ Неизвестная команда: <code>${command}</code>\n\nИспользуйте /help для списка доступных команд.`);
+        }
+      }
+    });
+
+    this.bot.on('polling_error', (error) => {
+      this.logger.error('Telegram polling error:', error);
+    });
+
+    this.logger.info('🤖 Telegram base handlers setup completed');
+  }
+
+  // 🆕 НАСТРОЙКА ОБРАБОТЧИКОВ КОМАНД
+  setupCommandHandlers(handlers: Record<string, () => Promise<void>>): void {
+    for (const [command, handler] of Object.entries(handlers)) {
+      this.commandHandlers.set(command, handler);
+    }
+    this.logger.info(`🤖 Registered ${Object.keys(handlers).length} command handlers`);
+  }
+
+  // 🆕 МЕТОДЫ ДЛЯ ОТВЕТОВ НА КОМАНДЫ
+
+  async sendStatsResponse(data: StatsData): Promise<void> {
+    try {
+      const uptimeHours = Math.floor(data.uptime / 3600);
+      const uptimeMinutes = Math.floor((data.uptime % 3600) / 60);
+      
+      let message = `📊 <b>Smart Money Bot Statistics</b>\n\n`;
+      
+      message += `🟢 <b>System Status:</b>\n`;
+      message += `⏱️ Uptime: <code>${uptimeHours}h ${uptimeMinutes}m</code>\n`;
+      message += `🔄 Mode: <code>${data.webhookMode === 'polling' ? 'Polling (5min)' : 'Real-time Webhooks'}</code>\n`;
+      message += `📡 Monitoring: <code>${data.pollingStats?.monitoredWallets || 0}/20</code> wallets\n\n`;
+      
+      message += `👥 <b>Smart Money Wallets:</b>\n`;
+      message += `🟢 Active: <code>${data.walletStats?.active || 0}</code>\n`;
+      message += `✅ Enabled: <code>${data.walletStats?.enabled || 0}</code>\n`;
+      message += `🔫 Snipers: <code>${data.walletStats?.byCategory?.sniper || 0}</code>\n`;
+      message += `💡 Hunters: <code>${data.walletStats?.byCategory?.hunter || 0}</code>\n`;
+      message += `🐳 Traders: <code>${data.walletStats?.byCategory?.trader || 0}</code>\n\n`;
+      
+      message += `📊 <b>Database:</b>\n`;
+      message += `💱 Total Swaps: <code>${data.dbStats?.totalSwaps || 0}</code>\n`;
+      message += `🎯 Positions: <code>${data.dbStats?.positionAggregations || 0}</code>\n`;
+      message += `🚨 High Suspicion: <code>${data.dbStats?.highSuspicionPositions || 0}</code>\n\n`;
+      
+      message += `🤖 <b>Notifications:</b>\n`;
+      message += `📤 Total Sent: <code>${data.notificationStats?.totalSent || 0}</code>\n`;
+      message += `🎯 Position Alerts: <code>${data.notificationStats?.positionAlerts || 0}</code>\n`;
+      message += `🚀 Smart Swaps: <code>${data.notificationStats?.smartMoneySwaps || 0}</code>\n`;
+      message += `⚙️ Commands: <code>${this.stats.commandsProcessed}</code>\n`;
+      message += `❌ Errors: <code>${data.notificationStats?.errorsSent || 0}</code>\n\n`;
+      
+      message += `📈 <b>Performance:</b>\n`;
+      message += `🎯 Position Monitoring: <code>${data.aggregationStats?.activePositions || 0}</code> active\n`;
+      message += `🔍 Discovery: Every 48 hours\n`;
+      message += `🔄 Flow Analysis: Every 4 hours\n\n`;
+      
+      message += `<code>#BotStats #SystemStatus</code>`;
+
+      await this.sendMessage(message);
+      this.logger.info('📊 Stats response sent');
+
+    } catch (error) {
+      this.logger.error('Error sending stats response:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  async sendWalletsResponse(data: WalletsData): Promise<void> {
+    try {
+      let message = `👥 <b>Active Smart Money Wallets</b>\n\n`;
+      
+      message += `📊 <b>Summary:</b>\n`;
+      message += `🟢 Active: <code>${data.stats?.active || 0}</code>\n`;
+      message += `✅ Enabled: <code>${data.stats?.enabled || 0}</code>\n`;
+      message += `👥 Total: <code>${data.totalCount}</code>\n\n`;
+      
+      message += `🏆 <b>Top Performers (showing ${Math.min(data.wallets.length, 15)}):</b>\n\n`;
+      
+      data.wallets.slice(0, 15).forEach((wallet, index) => {
+        const categoryEmoji = this.getCategoryEmoji(wallet.category || 'unknown');
+        const priorityEmoji = wallet.priority === 'high' ? '🔴' : wallet.priority === 'medium' ? '🟡' : '🟢';
+        const statusEmoji = wallet.enabled ? '✅' : '⚪';
+        
+        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> ${categoryEmoji} <b>${wallet.nickname || 'Unknown'}</b> ${priorityEmoji}${statusEmoji}\n`;
+        message += `    <code>${wallet.address.slice(0, 8)}...${wallet.address.slice(-4)}</code>\n`;
+        message += `    WR: <code>${(wallet.winRate || 0).toFixed(1)}%</code> | PnL: <code>$${this.formatNumber(wallet.totalPnL || 0)}</code> | Trades: <code>${wallet.totalTrades || 0}</code>\n`;
+        message += `    Avg: <code>$${this.formatNumber(wallet.avgTradeSize || 0)}</code> | Score: <code>${wallet.performanceScore || 0}</code>\n\n`;
+      });
+      
+      if (data.wallets.length > 15) {
+        message += `<i>... and ${data.wallets.length - 15} more wallets</i>\n\n`;
+      }
+      
+      message += `🔫 <b>Snipers:</b> <code>${data.stats?.byCategory?.sniper || 0}</code> | `;
+      message += `💡 <b>Hunters:</b> <code>${data.stats?.byCategory?.hunter || 0}</code> | `;
+      message += `🐳 <b>Traders:</b> <code>${data.stats?.byCategory?.trader || 0}</code>\n\n`;
+      
+      message += `<code>#SmartWallets #ActiveMonitoring</code>`;
+
+      await this.sendMessage(message);
+      this.logger.info(`👥 Wallets response sent: ${data.wallets.length} wallets`);
+
+    } catch (error) {
+      this.logger.error('Error sending wallets response:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  async sendSettingsResponse(settings: any): Promise<void> {
+    try {
+      let message = `⚙️ <b>Bot Configuration & Settings</b>\n\n`;
+      
+      message += `🔄 <b>Monitoring:</b>\n`;
+      message += `• Mode: <code>${settings.monitoringMode}</code>\n`;
+      message += `• Wallets: <code>${settings.pollingWallets}/20</code> active\n`;
+      message += `• Min Trade: <code>${settings.minTradeAmount}</code>\n\n`;
+      
+      message += `🕒 <b>Intervals:</b>\n`;
+      message += `• Flow Analysis: <code>${settings.flowAnalysisInterval}</code>\n`;
+      message += `• Wallet Discovery: <code>${settings.discoveryInterval}</code>\n`;
+      message += `• Position Reports: <code>12 hours</code>\n\n`;
+      
+      message += `🎯 <b>Features:</b>\n`;
+      message += `• Position Aggregation: <code>${settings.positionAggregation}</code>\n`;
+      message += `• Wallet Discovery: <code>${settings.walletDiscoveryEnabled ? 'Enabled' : 'Disabled'}</code>\n`;
+      message += `• Family Detection: <code>${settings.familyDetection}</code>\n`;
+      message += `• API Optimization: <code>${settings.apiOptimization}</code>\n\n`;
+      
+      message += `💾 <b>Cache Settings:</b>\n`;
+      message += `• Token Cache: <code>${settings.cacheSettings.tokenCache}</code>\n`;
+      message += `• Price Cache: <code>${settings.cacheSettings.priceCache}</code>\n\n`;
+      
+      message += `🎯 <b>Position Aggregation:</b>\n`;
+      message += `• Min Amount: <code>$10,000+ total</code>\n`;
+      message += `• Min Purchases: <code>3+ similar sizes</code>\n`;
+      message += `• Time Window: <code>90 minutes</code>\n`;
+      message += `• Size Tolerance: <code>2%</code>\n\n`;
+      
+      message += `<code>#BotSettings #Configuration</code>`;
+
+      await this.sendMessage(message);
+      this.logger.info('⚙️ Settings response sent');
+
+    } catch (error) {
+      this.logger.error('Error sending settings response:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  async sendTopTokensResponse(tokens: TopTokenData[]): Promise<void> {
+    try {
+      let message = `📈 <b>Top Tokens by Volume (24h)</b>\n\n`;
+      
+      if (tokens.length === 0) {
+        message += `<i>No token data available for the last 24 hours</i>\n\n`;
+        message += `<code>#TopTokens #NoData</code>`;
+        await this.sendMessage(message);
+        return;
+      }
+      
+      message += `🏆 <b>Top ${Math.min(tokens.length, 15)} by Smart Money Volume:</b>\n\n`;
+      
+      tokens.slice(0, 15).forEach((token, index) => {
+        const changeEmoji = token.priceChange24h >= 0 ? '📈' : '📉';
+        const changeText = token.priceChange24h >= 0 ? '+' : '';
+        
+        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${token.tokenSymbol}</code> ${changeEmoji}\n`;
+        message += `    Vol: <code>$${this.formatNumber(token.volume24h)}</code> | Swaps: <code>${token.swapCount}</code>\n`;
+        message += `    Wallets: <code>${token.uniqueWallets}</code> | Change: <code>${changeText}${token.priceChange24h.toFixed(1)}%</code>\n`;
+        message += `    <a href="https://solscan.io/token/${token.tokenAddress}">SolS</a> | <a href="https://dexscreener.com/solana/${token.tokenAddress}">DS</a>\n\n`;
+      });
+      
+      const totalVolume = tokens.reduce((sum, t) => sum + t.volume24h, 0);
+      const totalSwaps = tokens.reduce((sum, t) => sum + t.swapCount, 0);
+      
+      message += `📊 <b>24h Summary:</b>\n`;
+      message += `💰 Total Volume: <code>$${this.formatNumber(totalVolume)}</code>\n`;
+      message += `🔄 Total Swaps: <code>${totalSwaps}</code>\n`;
+      message += `🪙 Unique Tokens: <code>${tokens.length}</code>\n\n`;
+      
+      message += `<code>#TopTokens #Volume24h #SmartMoney</code>`;
+
+      await this.sendMessage(message);
+      this.logger.info(`📈 Top tokens response sent: ${tokens.length} tokens`);
+
+    } catch (error) {
+      this.logger.error('Error sending top tokens response:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  async sendPositionsResponse(data: PositionsData): Promise<void> {
+    try {
+      let message = `🎯 <b>Position Aggregation Status</b>\n\n`;
+      
+      message += `📊 <b>Overview:</b>\n`;
+      message += `🎯 Total Positions: <code>${data.totalPositions}</code>\n`;
+      message += `🚨 High Suspicion (75+): <code>${data.highSuspicionPositions}</code>\n`;
+      message += `💰 Total Value: <code>$${this.formatNumber(data.totalValueUSD)}</code>\n`;
+      message += `📈 Avg Suspicion: <code>${data.avgSuspicionScore.toFixed(1)}/100</code>\n\n`;
+      
+      message += `🔄 <b>Real-time Monitoring:</b>\n`;
+      message += `⚡ Active Positions: <code>${data.activeMonitoring}</code>\n`;
+      message += `🆕 Detected Today: <code>${data.detectedToday}</code>\n`;
+      message += `📢 Alerts Sent Today: <code>${data.alertsSentToday}</code>\n\n`;
+      
+      message += `⚠️ <b>Risk Distribution:</b>\n`;
+      message += `🔴 High Risk (80+): <code>${data.riskDistribution.high}</code>\n`;
+      message += `🟡 Medium Risk (60-79): <code>${data.riskDistribution.medium}</code>\n`;
+      message += `🟢 Low Risk (<60): <code>${data.riskDistribution.low}</code>\n\n`;
+      
+      if (data.topWalletsByPositions.length > 0) {
+        message += `🏆 <b>Top Wallets by Position Count:</b>\n`;
+        data.topWalletsByPositions.slice(0, 8).forEach((wallet, index) => {
+          message += `<code>${index + 1}.</code> <code>${wallet.walletAddress.slice(0, 8)}...${wallet.walletAddress.slice(-4)}</code>\n`;
+          message += `    Positions: <code>${wallet.positionCount}</code> | Value: <code>$${this.formatNumber(wallet.totalValueUSD)}</code>\n`;
+        });
+        message += '\n';
+      }
+      
+      message += `🎯 <b>Detection Criteria:</b>\n`;
+      message += `• Min Total: <code>$10,000+</code>\n`;
+      message += `• Min Purchases: <code>3+ similar sizes</code>\n`;
+      message += `• Time Window: <code>90 minutes max</code>\n`;
+      message += `• Size Tolerance: <code>2%</code>\n\n`;
+      
+      message += `<code>#PositionAggregation #SuspiciousActivity #Monitoring</code>`;
+
+      await this.sendMessage(message);
+      this.logger.info('🎯 Positions response sent');
+
+    } catch (error) {
+      this.logger.error('Error sending positions response:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  async sendDiscoveryResponse(data: DiscoveryData): Promise<void> {
+    try {
+      let message = `🔍 <b>Wallet Discovery Completed</b>\n\n`;
+      
+      message += `📊 <b>Discovery Results:</b>\n`;
+      message += `🔍 Analyzed: <code>${data.totalAnalyzed}</code> wallets\n`;
+      message += `💡 Smart Money Found: <code>${data.smartMoneyFound}</code>\n`;
+      message += `➕ New Wallets Added: <code>${data.newWallets}</code>\n`;
+      message += `🔄 Updated Existing: <code>${data.updatedWallets}</code>\n\n`;
+      
+      if (data.newWallets > 0) {
+        message += `✅ <b>Successfully added ${data.newWallets} new Smart Money wallets to monitoring!</b>\n\n`;
+        message += `🎯 New wallets will be included in the next monitoring cycle.\n`;
+        message += `📊 Use /wallets to see the updated list.\n\n`;
+      } else {
+        message += `ℹ️ <b>No new wallets met the Smart Money criteria this time.</b>\n\n`;
+        message += `🔍 Current criteria:\n`;
+        message += `• Win Rate: 65%+\n`;
+        message += `• Total PnL: $50,000+\n`;
+        message += `• Total Trades: 30+\n`;
+        message += `• Performance Score: 75+\n\n`;
+      }
+      
+      const successRate = data.totalAnalyzed > 0 ? ((data.smartMoneyFound / data.totalAnalyzed) * 100).toFixed(1) : '0';
+      message += `📈 <b>Discovery Rate:</b> <code>${successRate}%</code> Smart Money\n\n`;
+      
+      message += `⏰ <b>Next automatic discovery:</b> <code>48 hours</code>\n\n`;
+      
+      message += `<code>#WalletDiscovery #SmartMoney #ManualScan</code>`;
+
+      await this.sendMessage(message);
+      this.logger.info(`🔍 Discovery response sent: ${data.newWallets} new wallets`);
+
+    } catch (error) {
+      this.logger.error('Error sending discovery response:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  async sendHelpResponse(): Promise<void> {
+    try {
+      let message = `🤖 <b>Smart Money Bot Commands</b>\n\n`;
+      
+      message += `📊 <b>Monitoring Commands:</b>\n`;
+      message += `/stats - Bot & wallet statistics\n`;
+      message += `/wallets - Active Smart Money wallets\n`;
+      message += `/settings - Current monitoring settings\n`;
+      message += `/positions - Position aggregation status\n\n`;
+      
+      message += `📈 <b>Analysis Commands:</b>\n`;
+      message += `/top - Top tokens by volume (24h)\n`;
+      message += `/discover - Force wallet discovery\n\n`;
+      
+      message += `❓ <b>Help & Info:</b>\n`;
+      message += `/help - This help message\n\n`;
+      
+      message += `🔥 <b>Key Features:</b>\n`;
+      message += `• Real-time Smart Money monitoring\n`;
+      message += `• Position splitting detection\n`;
+      message += `• Automatic wallet discovery (48h)\n`;
+      message += `• Flow analysis every 4 hours\n`;
+      message += `• API optimized (-95% requests)\n\n`;
+      
+      message += `🎯 <b>Current Settings:</b>\n`;
+      message += `• Min Trade Alert: $8,000+\n`;
+      message += `• Position Detection: $10,000+\n`;
+      message += `• Monitoring: 20 top wallets\n`;
+      message += `• Discovery: Every 48 hours\n\n`;
+      
+      message += `📝 <b>Note:</b> All commands work only for authorized users.\n\n`;
+      
+      message += `<code>#Help #BotCommands #SmartMoney</code>`;
+
+      await this.sendMessage(message);
+      this.logger.info('❓ Help response sent');
+
+    } catch (error) {
+      this.logger.error('Error sending help response:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  async sendCommandError(command: string, error: any): Promise<void> {
+    try {
+      let message = `❌ <b>Command Error</b>\n\n`;
+      message += `🤖 Command: <code>/${command}</code>\n`;
+      message += `⚠️ Error: <code>${error.message || 'Unknown error'}</code>\n\n`;
+      message += `💡 Try again in a few seconds, or use /help for available commands.`;
+
+      await this.sendMessage(message);
+      this.stats.errorsSent++;
+
+    } catch (sendError) {
+      this.logger.error('Error sending command error message:', sendError);
+    }
   }
 
   // 🎯 POSITION SPLITTING ALERTS

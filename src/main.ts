@@ -1,4 +1,4 @@
-// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ + 48h DISCOVERY - С АВТОМАТИЧЕСКОЙ МИГРАЦИЕЙ БД + ИСПРАВЛЕНА FOREIGN KEY ПРОБЛЕМА
+// src/main.ts - ОПТИМИЗИРОВАННЫЙ ДЛЯ API ЭКОНОМИИ + АГРЕГАЦИЯ ПОЗИЦИЙ + 48h DISCOVERY - С АВТОМАТИЧЕСКОЙ МИГРАЦИЕЙ БД + ИСПРАВЛЕНА FOREIGN KEY ПРОБЛЕМА + TELEGRAM КОМАНДЫ
 import * as dotenv from 'dotenv';
 import { SolanaMonitor } from './services/SolanaMonitor';
 import { TelegramNotifier } from './services/TelegramNotifier';
@@ -65,7 +65,7 @@ class SmartMoneyBotRunner {
     
     this.webhookManager = new QuickNodeWebhookManager();
 
-    this.logger.info('✅ Smart Money Bot services initialized (OPTIMIZED + POSITION AGGREGATION + 48h DISCOVERY)');
+    this.logger.info('✅ Smart Money Bot services initialized (OPTIMIZED + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS)');
   }
 
   // 🔧 НОВЫЙ МЕТОД: АВТОМАТИЧЕСКАЯ МИГРАЦИЯ БАЗЫ ДАННЫХ
@@ -549,9 +549,225 @@ class SmartMoneyBotRunner {
     }
   }
 
+  // 🆕 МЕТОДЫ ДЛЯ ОБРАБОТКИ TELEGRAM КОМАНД
+  private setupTelegramCommands(): void {
+    this.telegramNotifier.setupCommandHandlers({
+      '/stats': this.handleStatsCommand.bind(this),
+      '/wallets': this.handleWalletsCommand.bind(this),
+      '/settings': this.handleSettingsCommand.bind(this),
+      '/top': this.handleTopCommand.bind(this),
+      '/positions': this.handlePositionsCommand.bind(this),
+      '/discover': this.handleDiscoverCommand.bind(this),
+      '/help': this.handleHelpCommand.bind(this)
+    });
+
+    this.logger.info('🤖 Telegram commands setup completed');
+  }
+
+  private async handleStatsCommand(): Promise<void> {
+    try {
+      this.logger.info('📊 Processing /stats command');
+      
+      const [walletStats, dbStats, pollingStats, loaderStats] = await Promise.all([
+        this.smDatabase.getWalletStats(),
+        this.database.getDatabaseStats(),
+        this.webhookManager.getPollingStats(),
+        this.smartWalletLoader.getStats()
+      ]);
+
+      const aggregationStats = this.solanaMonitor.getAggregationStats();
+      const notificationStats = this.telegramNotifier.getNotificationStats();
+
+      await this.telegramNotifier.sendStatsResponse({
+        walletStats,
+        dbStats,
+        pollingStats,
+        aggregationStats,
+        loaderStats,
+        notificationStats,
+        webhookMode: this.webhookId === 'polling-mode' ? 'polling' : 'webhook',
+        uptime: process.uptime()
+      });
+
+    } catch (error) {
+      this.logger.error('Error processing /stats command:', error);
+      await this.telegramNotifier.sendCommandError('stats', error);
+    }
+  }
+
+  private async handleWalletsCommand(): Promise<void> {
+    try {
+      this.logger.info('👥 Processing /wallets command');
+      
+      const activeWallets = await this.smDatabase.getAllActiveSmartWallets();
+      const walletStats = await this.smDatabase.getWalletStats();
+
+      await this.telegramNotifier.sendWalletsResponse({
+        wallets: activeWallets.slice(0, 20), // Показываем только топ 20
+        stats: walletStats,
+        totalCount: activeWallets.length
+      });
+
+    } catch (error) {
+      this.logger.error('Error processing /wallets command:', error);
+      await this.telegramNotifier.sendCommandError('wallets', error);
+    }
+  }
+
+  private async handleSettingsCommand(): Promise<void> {
+    try {
+      this.logger.info('⚙️ Processing /settings command');
+      
+      const settings = {
+        monitoringMode: this.webhookId === 'polling-mode' ? 'Polling (5 min)' : 'Real-time Webhooks',
+        pollingWallets: this.webhookManager.getPollingStats().monitoredWallets,
+        discoveryInterval: '48 hours',
+        positionAggregation: 'Enabled',
+        minTradeAmount: '$8,000+',
+        flowAnalysisInterval: '4 hours',
+        walletDiscoveryEnabled: true,
+        familyDetection: 'Disabled',
+        apiOptimization: 'Enabled (-95% requests)',
+        cacheSettings: {
+          tokenCache: '24h TTL',
+          priceCache: '5min TTL'
+        }
+      };
+
+      await this.telegramNotifier.sendSettingsResponse(settings);
+
+    } catch (error) {
+      this.logger.error('Error processing /settings command:', error);
+      await this.telegramNotifier.sendCommandError('settings', error);
+    }
+  }
+
+  private async handleTopCommand(): Promise<void> {
+    try {
+      this.logger.info('📈 Processing /top command');
+      
+      // Используем flowAnalyzer для получения данных о токенах
+      const flowResult = await this.flowAnalyzer.analyzeSmartMoneyFlows();
+      
+      // Объединяем inflows и outflows для получения общей активности
+      const allFlows = [...flowResult.inflows, ...flowResult.outflows];
+      
+      // Преобразуем в формат TopTokenData
+      const topTokens = allFlows.slice(0, 15).map(flow => ({
+        tokenAddress: flow.tokenAddress,
+        tokenSymbol: flow.tokenSymbol,
+        tokenName: flow.tokenSymbol, // используем symbol как name
+        volume24h: (flow.totalInflowUSD || 0) + (flow.totalOutflowUSD || 0),
+        swapCount: flow.uniqueWallets || 0, // используем количество кошельков вместо swapCount
+        uniqueWallets: flow.uniqueWallets || 0,
+        priceChange24h: 0 // данные о изменении цены пока недоступны
+      }));
+      
+      await this.telegramNotifier.sendTopTokensResponse(topTokens);
+
+    } catch (error) {
+      this.logger.error('Error processing /top command:', error);
+      
+      // Если анализ не удался, отправляем пустой массив
+      await this.telegramNotifier.sendTopTokensResponse([]);
+    }
+  }
+
+  private async handlePositionsCommand(): Promise<void> {
+    try {
+      this.logger.info('🎯 Processing /positions command');
+      
+      const positionStats = await this.database.getPositionAggregationStats();
+      const aggregationStats = this.solanaMonitor.getAggregationStats();
+      
+      await this.telegramNotifier.sendPositionsResponse({
+        ...positionStats,
+        activeMonitoring: aggregationStats.activePositions,
+        detectedToday: aggregationStats.stats?.totalPositionsDetected || 0,
+        alertsSentToday: aggregationStats.stats?.alertsSent || 0
+      });
+
+    } catch (error) {
+      this.logger.error('Error processing /positions command:', error);
+      await this.telegramNotifier.sendCommandError('positions', error);
+    }
+  }
+
+  private async handleDiscoverCommand(): Promise<void> {
+    try {
+      this.logger.info('🔍 Processing /discover command');
+      
+      await this.telegramNotifier.sendCycleLog('🔍 <b>Starting forced wallet discovery...</b>\n\nThis may take 2-3 minutes.');
+
+      const discoveryResults = await this.walletDiscovery.discoverSmartWallets();
+      
+      let newWallets = 0;
+      let updatedWallets = 0;
+      
+      const maxNewWallets = 5; // Ограничиваем для принудительного поиска
+      let processedCount = 0;
+      
+      for (const result of discoveryResults) {
+        if (processedCount >= maxNewWallets) break;
+        
+        if (result.isSmartMoney && result.category) {
+          const existingWallet = await this.smDatabase.getSmartWallet(result.address);
+          
+          const success = await this.smartWalletLoader.addWalletToConfig(
+            result.address,
+            result.category,
+            `Manual ${result.category} ${result.address.slice(0, 8)}`,
+            `Manually discovered ${result.category} wallet`,
+            {
+              winRate: result.metrics.winRate,
+              totalPnL: result.metrics.totalPnL,
+              totalTrades: result.metrics.totalTrades,
+              avgTradeSize: result.metrics.avgTradeSize,
+              maxTradeSize: result.metrics.maxTradeSize,
+              performanceScore: this.calculatePerformanceScore(result.metrics)
+            },
+            'discovery'
+          );
+          
+          if (success) {
+            if (!existingWallet) {
+              newWallets++;
+              processedCount++;
+            } else {
+              updatedWallets++;
+            }
+          }
+        }
+      }
+
+      await this.telegramNotifier.sendDiscoveryResponse({
+        totalAnalyzed: discoveryResults.length,
+        newWallets,
+        updatedWallets,
+        smartMoneyFound: discoveryResults.filter(r => r.isSmartMoney).length
+      });
+
+    } catch (error) {
+      this.logger.error('Error processing /discover command:', error);
+      await this.telegramNotifier.sendCommandError('discover', error);
+    }
+  }
+
+  private async handleHelpCommand(): Promise<void> {
+    try {
+      this.logger.info('❓ Processing /help command');
+      
+      await this.telegramNotifier.sendHelpResponse();
+
+    } catch (error) {
+      this.logger.error('Error processing /help command:', error);
+      await this.telegramNotifier.sendCommandError('help', error);
+    }
+  }
+
   async start(): Promise<void> {
     try {
-      this.logger.info('🚀 Starting OPTIMIZED Smart Money Bot System + POSITION AGGREGATION + 48h DISCOVERY...');
+      this.logger.info('🚀 Starting OPTIMIZED Smart Money Bot System + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS...');
 
       // 🔧 КРИТИЧЕСКИ ВАЖНО: ВЫПОЛНЯЕМ МИГРАЦИЮ ПЕРЕД ИНИЦИАЛИЗАЦИЕЙ БД
       await this.performDatabaseMigration();
@@ -572,6 +788,9 @@ class SmartMoneyBotRunner {
 
       this.isRunning = true;
 
+      // 🆕 НАСТРОЙКА TELEGRAM КОМАНД
+      this.setupTelegramCommands();
+
       await this.webhookServer.start();
       this.logger.info('✅ Webhook server started (WITH POSITION AGGREGATION)');
 
@@ -588,13 +807,14 @@ class SmartMoneyBotRunner {
       // 🎯 НОВЫЙ: Периодическая отправка статистики агрегации
       this.startPositionAggregationReports();
 
-      this.logger.info('✅ OPTIMIZED Smart Money Bot started successfully + POSITION AGGREGATION + 48h DISCOVERY!');
+      this.logger.info('✅ OPTIMIZED Smart Money Bot started successfully + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS!');
       this.logger.info('📊 Real-time DEX monitoring active (OPTIMIZED)');
       this.logger.info('🔍 Smart Money flow analysis running (4h intervals)');
       this.logger.info('🎯 Advanced insider detection enabled (LIMITED)');
       this.logger.info('⚠️ Family wallet detection disabled');
       this.logger.info('🎯 Position splitting detection ENABLED');
       this.logger.info('🚀 Wallet discovery: EVERY 48 HOURS (was 14 days)');
+      this.logger.info('🤖 Telegram commands: ENABLED (/help for list)');
 
       process.on('SIGINT', () => this.shutdown());
       process.on('SIGTERM', () => this.shutdown());
@@ -788,7 +1008,7 @@ class SmartMoneyBotRunner {
         '📡 <b>Real-time Webhooks</b>';
 
       await this.telegramNotifier.sendCycleLog(
-        `🟢 <b>OPTIMIZED Smart Money Bot Online + POSITION AGGREGATION + 48h DISCOVERY!</b>\n\n` +
+        `🟢 <b>OPTIMIZED Smart Money Bot Online + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS!</b>\n\n` +
         `📊 Monitoring <code>${stats.active}</code> active wallets (<code>${stats.enabled}</code> enabled)\n` +
         `🔫 Snipers: <code>${stats.byCategory.sniper || 0}</code>\n` +
         `💡 Hunters: <code>${stats.byCategory.hunter || 0}</code>\n` +
@@ -816,6 +1036,14 @@ class SmartMoneyBotRunner {
         `• Min amount: $10K+ total\n` +
         `• Min purchases: 3+ similar sizes\n` +
         `• Time window: 90 minutes\n\n` +
+        `🤖 <b>TELEGRAM COMMANDS ENABLED:</b>\n` +
+        `• /stats - Bot & wallet statistics\n` +
+        `• /wallets - Active Smart Money wallets\n` +
+        `• /settings - Current monitoring settings\n` +
+        `• /top - Top tokens by volume (24h)\n` +
+        `• /positions - Position aggregation status\n` +
+        `• /discover - Force wallet discovery\n` +
+        `• /help - Commands help\n\n` +
         `📝 Config updated: <code>${loaderStats?.lastUpdated}</code>`
       );
     } catch (error) {
@@ -1064,7 +1292,7 @@ class SmartMoneyBotRunner {
   }
 
   private async shutdown(): Promise<void> {
-    this.logger.info('🔴 Shutting down OPTIMIZED Smart Money Bot + POSITION AGGREGATION + 48h DISCOVERY...');
+    this.logger.info('🔴 Shutting down OPTIMIZED Smart Money Bot + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS...');
     
     this.isRunning = false;
     
@@ -1102,12 +1330,12 @@ class SmartMoneyBotRunner {
     }
     
     try {
-      await this.telegramNotifier.sendCycleLog('🔴 <b>OPTIMIZED Smart Money Bot stopped + POSITION AGGREGATION + 48h DISCOVERY</b>');
+      await this.telegramNotifier.sendCycleLog('🔴 <b>OPTIMIZED Smart Money Bot stopped + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS</b>');
     } catch (error) {
       this.logger.error('Failed to send shutdown notification:', error);
     }
     
-    this.logger.info('✅ OPTIMIZED Smart Money Bot shutdown completed + POSITION AGGREGATION + 48h DISCOVERY');
+    this.logger.info('✅ OPTIMIZED Smart Money Bot shutdown completed + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS');
     process.exit(0);
   }
 }
@@ -1117,7 +1345,7 @@ const main = async () => {
     const bot = new SmartMoneyBotRunner();
     await bot.start();
   } catch (error) {
-    console.error('💥 Fatal error starting OPTIMIZED Smart Money Bot + POSITION AGGREGATION + 48h DISCOVERY:', error);
+    console.error('💥 Fatal error starting OPTIMIZED Smart Money Bot + POSITION AGGREGATION + 48h DISCOVERY + TELEGRAM COMMANDS:', error);
     process.exit(1);
   }
 };
