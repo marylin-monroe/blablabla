@@ -460,7 +460,7 @@ export class TelegramNotifier {
 
       flows.slice(0, 8).forEach((flow, index) => {
         const amount = type === 'inflow' ? flow.totalInflowUSD : flow.totalOutflowUSD;
-        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${flow.tokenSymbol}</code> <b>$${this.formatNumber(amount)}</b> <code>(${flow.uniqueWallets} wallets)</code>\n`;
+        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${flow.tokenSymbol} (${this.truncateAddress(flow.tokenAddress)})</code> <b>$${this.formatNumber(amount)}</b> <code>(${flow.uniqueWallets} wallets)</code>\n`;
       });
 
       message += `\n<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
