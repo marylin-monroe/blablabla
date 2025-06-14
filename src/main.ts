@@ -1463,10 +1463,11 @@ class SmartMoneyBotRunner {
       let reason = '';
       
       // 🔥 СТРОЖЕ: win rate < 60% (было 55%)
-      if (wallet.winRate < 60) {
-        shouldDeactivate = true;
-        reason = `Win rate dropped to ${wallet.winRate.toFixed(1)}%`;
-      } else if (wallet.lastActiveAt < thirtyDaysAgo) {
+      //if (wallet.winRate < 60) {
+        //shouldDeactivate = true;
+        //reason = `Win rate dropped to ${wallet.winRate.toFixed(1)}%`;
+      //} else 
+      if (wallet.lastActiveAt < thirtyDaysAgo) {
         shouldDeactivate = true;
         const daysInactive = Math.floor((Date.now() - wallet.lastActiveAt.getTime()) / (1000 * 60 * 60 * 24));
         reason = `Inactive for ${daysInactive} days`;
@@ -1491,8 +1492,8 @@ class SmartMoneyBotRunner {
   private calculatePerformanceScore(metrics: any): number {
     let score = 0;
     
-    score += Math.min(metrics.winRate * 0.5, 30);
-    score += Math.min(Math.log10(Math.max(metrics.totalPnL, 1)) * 5, 25);
+    //score += Math.min(metrics.winRate * 0.5, 30);
+    score += Math.min(Math.log10(Math.max(metrics.totalPnL, 1)) * 8, 55); // УВЕЛИЧЕН ВЕС PnL
     score += Math.min(metrics.totalTrades * 0.3, 15);
     score += Math.min(Math.log10(Math.max(metrics.avgTradeSize, 1)) * 3, 15);
     score += Math.min(metrics.sharpeRatio * 7.5, 15);

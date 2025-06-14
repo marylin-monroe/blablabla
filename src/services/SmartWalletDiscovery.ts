@@ -515,9 +515,9 @@ export class SmartWalletDiscovery {
       }
       
       // 🔥 СМЯГЧЕННЫЕ требования для поиска большего числа талантов
-      if (metrics.winRate < 60) { // СНИЖЕНО с 75% до 60%
-        reasons.push(`Win rate too low: ${metrics.winRate.toFixed(1)}% (required: 60%+)`);
-      }
+      //if (metrics.winRate < 60) { // СНИЖЕНО с 75% до 60%
+        //reasons.push(`Win rate too low: ${metrics.winRate.toFixed(1)}% (required: 60%+)`);
+      //}
       
       if (metrics.totalPnL < 20000) { // СНИЖЕНО с $100K до $20K
         reasons.push(`PnL too low: $${metrics.totalPnL.toFixed(0)} (required: $20K+)`);
