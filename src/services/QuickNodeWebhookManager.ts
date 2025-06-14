@@ -1,4 +1,4 @@
-// src/services/QuickNodeWebhookManager.ts - ПОЛНАЯ ВЕРСИЯ с ALCHEMY + ВСЕ ИСПРАВЛЕНИЯ + MULTIPROVIDER - ИСПРАВЛЕННЫЙ
+// src/services/QuickNodeWebhookManager.ts - ИСПРАВЛЕН: добавлена фильтрация старых транзакций + все существующие методы сохранены
 import { Logger } from '../utils/Logger';
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { TelegramNotifier } from './TelegramNotifier';
@@ -107,6 +107,10 @@ export class QuickNodeWebhookManager {
   private isPollingInProgress: boolean = false;
   private providerSwitchMutex: boolean = false;
 
+  // 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Константы для фильтрации времени транзакций
+  private readonly MAX_TRANSACTION_AGE_MINUTES = 10; // Максимальный возраст транзакции в минутах
+  private readonly MAX_TRANSACTION_AGE_MS = this.MAX_TRANSACTION_AGE_MINUTES * 60 * 1000;
+
   constructor() {
     this.logger = Logger.getInstance();
     this.initializeProviders();
@@ -183,7 +187,7 @@ export class QuickNodeWebhookManager {
     // Каждые 5 минут анализируем производительность провайдеров
     setInterval(() => {
       this.analyzeProviderPerformance();
-    }, 5 * 60 * 1000); // 5 минут
+    }, 10 * 60 * 1000); // 10 минут
 
     this.logger.info('📊 Provider performance tracking started');
   }
@@ -484,11 +488,25 @@ export class QuickNodeWebhookManager {
       
       if (signatures.length === 0) return;
 
+      // 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Фильтруем старые транзакции уже на уровне подписей
+      const recentSignatures = signatures.filter(sig => {
+        if (!sig.blockTime) return false;
+        const age = Date.now() - (sig.blockTime * 1000);
+        return age <= this.MAX_TRANSACTION_AGE_MS;
+      });
+
+      if (recentSignatures.length === 0) {
+        this.logger.debug(`⏰ No recent transactions for ${walletAddress.slice(0, 8)}... (${signatures.length} total signatures too old)`);
+        return;
+      }
+
       // Обновляем последнюю обработанную транзакцию
       this.lastProcessedSignatures.set(walletAddress, signatures[0].signature);
 
-      // 🔥 ОБРАБАТЫВАЕМ ТОЛЬКО ПЕРВЫЕ 3 ТРАНЗАКЦИИ
-      for (const sigInfo of signatures.slice(0, 3).reverse()) {
+      this.logger.info(`🔍 Processing ${recentSignatures.length}/${signatures.length} recent transactions for ${walletAddress.slice(0, 8)}...`);
+
+      // 🔥 ОБРАБАТЫВАЕМ ТОЛЬКО ПЕРВЫЕ 3 НЕДАВНИЕ ТРАНЗАКЦИИ
+      for (const sigInfo of recentSignatures.slice(0, 3).reverse()) {
         try {
           if (!this.canMakeRequest()) break;
           
@@ -635,17 +653,80 @@ export class QuickNodeWebhookManager {
       
       if (!transaction) return;
 
+      // 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Проверяем возраст транзакции
+      if (!this.isTransactionRecent(transaction)) {
+        const transactionAge = this.getTransactionAge(transaction);
+        this.logger.debug(`⏰ Skipping old transaction: ${signature} (age: ${transactionAge})`);
+        return;
+      }
+
       const swaps = await this.extractSwapsFromTransaction(transaction, wallet);
       
       for (const swap of swaps) {
         if (this.shouldProcessSmartMoneySwapOptimized(swap, wallet)) {
           await this.saveAndNotifySwap(swap);
-          this.logger.info(`🔥 SM swap: ${swap.tokenSymbol} - $${swap.amountUSD.toFixed(0)} (via ${provider.name})`);
+          this.logger.info(`🔥 SM swap: ${swap.tokenSymbol} - $${swap.amountUSD.toFixed(0)} (${this.getTransactionAge(transaction)}) (via ${provider.name})`);
         }
       }
 
     } catch (error) {
       this.logger.error(`Error processing transaction ${signature} with ${provider.name}:`, error);
+    }
+  }
+
+  // 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: НОВЫЙ МЕТОД - Проверка актуальности транзакции
+  private isTransactionRecent(transaction: any): boolean {
+    if (!transaction?.blockTime) {
+      this.logger.warn('⚠️ Transaction missing blockTime, skipping');
+      return false;
+    }
+
+    const transactionTime = transaction.blockTime * 1000; // blockTime в секундах, конвертируем в мс
+    const now = Date.now();
+    const age = now - transactionTime;
+
+    const isRecent = age <= this.MAX_TRANSACTION_AGE_MS;
+    
+    if (!isRecent) {
+      const ageMinutes = Math.floor(age / (1000 * 60));
+      const ageHours = Math.floor(ageMinutes / 60);
+      const ageDays = Math.floor(ageHours / 24);
+      
+      let ageString = '';
+      if (ageDays > 0) {
+        ageString = `${ageDays}d ${ageHours % 24}h`;
+      } else if (ageHours > 0) {
+        ageString = `${ageHours}h ${ageMinutes % 60}m`;
+      } else {
+        ageString = `${ageMinutes}m`;
+      }
+      
+      this.logger.debug(`⏰ Transaction too old: ${ageString} (limit: ${this.MAX_TRANSACTION_AGE_MINUTES}m)`);
+    }
+
+    return isRecent;
+  }
+
+  // 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: НОВЫЙ МЕТОД - Получение возраста транзакции для логирования
+  private getTransactionAge(transaction: any): string {
+    if (!transaction?.blockTime) return 'unknown age';
+    
+    const transactionTime = transaction.blockTime * 1000;
+    const now = Date.now();
+    const age = now - transactionTime;
+    
+    const ageMinutes = Math.floor(age / (1000 * 60));
+    const ageHours = Math.floor(ageMinutes / 60);
+    const ageDays = Math.floor(ageHours / 24);
+    
+    if (ageDays > 0) {
+      return `${ageDays}d ${ageHours % 24}h ago`;
+    } else if (ageHours > 0) {
+      return `${ageHours}h ${ageMinutes % 60}m ago`;
+    } else if (ageMinutes > 0) {
+      return `${ageMinutes}m ago`;
+    } else {
+      return 'just now';
     }
   }
 
@@ -661,11 +742,25 @@ export class QuickNodeWebhookManager {
       
       if (signatures.length === 0) return;
 
+      // 🔧 ИСПРАВЛЕНИЕ: Фильтруем старые транзакции уже на уровне подписей
+      const recentSignatures = signatures.filter(sig => {
+        if (!sig.blockTime) return false;
+        const age = Date.now() - (sig.blockTime * 1000);
+        return age <= this.MAX_TRANSACTION_AGE_MS;
+      });
+
+      if (recentSignatures.length === 0) {
+        this.logger.debug(`⏰ No recent transactions for ${walletAddress.slice(0, 8)}... (${signatures.length} total signatures too old)`);
+        return;
+      }
+
       // Обновляем последнюю обработанную транзакцию
       this.lastProcessedSignatures.set(walletAddress, signatures[0].signature);
 
-      // 🔥 ОБРАБАТЫВАЕМ ТОЛЬКО ПЕРВЫЕ 3 ТРАНЗАКЦИИ
-      for (const sigInfo of signatures.slice(0, 3).reverse()) {
+      this.logger.info(`🔍 Processing ${recentSignatures.length}/${signatures.length} recent transactions for ${walletAddress.slice(0, 8)}...`);
+
+      // Обрабатываем только свежие транзакции
+      for (const sigInfo of recentSignatures.slice(0, 3).reverse()) {
         try {
           if (!this.canMakeRequest()) break;
           
@@ -883,12 +978,19 @@ export class QuickNodeWebhookManager {
       const transaction = await this.getTransactionDetails(signature);
       if (!transaction) return;
 
+      // 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Проверяем возраст транзакции
+      if (!this.isTransactionRecent(transaction)) {
+        const transactionAge = this.getTransactionAge(transaction);
+        this.logger.debug(`⏰ Skipping old transaction: ${signature} (age: ${transactionAge})`);
+        return;
+      }
+
       const swaps = await this.extractSwapsFromTransaction(transaction, wallet);
       
       for (const swap of swaps) {
         if (this.shouldProcessSmartMoneySwapOptimized(swap, wallet)) {
           await this.saveAndNotifySwap(swap);
-          this.logger.info(`🔥 SM swap: ${swap.tokenSymbol} - $${swap.amountUSD.toFixed(0)}`);
+          this.logger.info(`🔥 SM swap: ${swap.tokenSymbol} - $${swap.amountUSD.toFixed(0)} (${this.getTransactionAge(transaction)})`);
         }
       }
 
@@ -1302,6 +1404,11 @@ export class QuickNodeWebhookManager {
       tokenCacheSize: this.tokenInfoCache.size,
       priceCacheSize: this.priceCache.size,
       providers: providerStats,
+      transactionFiltering: {
+        maxAgeMinutes: this.MAX_TRANSACTION_AGE_MINUTES,
+        maxAgeMs: this.MAX_TRANSACTION_AGE_MS,
+        filteringEnabled: true
+      },
       apiUsage: {
         currentMinute: this.apiLimits.currentMinuteRequests,
         maxMinute: this.apiLimits.requestsPerMinute,
@@ -1319,7 +1426,8 @@ export class QuickNodeWebhookManager {
         raceConditionProtection: 'enabled',
         multiProviderFailover: 'enabled',
         loadBalancing: 'enabled', // 🆕 НОВАЯ ФИЧА
-        dynamicBatchSize: 'enabled' // 🆕 НОВАЯ ФИЧА
+        dynamicBatchSize: 'enabled', // 🆕 НОВАЯ ФИЧА
+        oldTransactionFiltering: 'enabled' // 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ
       }
     };
   }

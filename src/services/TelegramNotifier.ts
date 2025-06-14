@@ -1,7 +1,8 @@
-// src/services/TelegramNotifier.ts - ПОЛНАЯ ВЕРСИЯ + INSIDER DETECTOR + MULTIPROVIDER + ВСЕ МЕТОДЫ + TELEGRAM КОМАНДЫ
+// src/services/TelegramNotifier.ts - ПОЛНАЯ ВЕРСИЯ + WHALE ALERTS + ИСПРАВЛЕНЫ АДРЕСА ТОКЕНОВ + ВСЕ МЕТОДЫ
 import TelegramBot from 'node-telegram-bot-api';
 import { TokenSwap, WalletInfo, SmartMoneyReport, InsiderAlert, SmartMoneyFlow, HotNewToken, SmartMoneySwap, PositionAggregation, ProviderStats, MultiProviderMetrics, PositionAggregationStats } from '../types';
 import { Logger } from '../utils/Logger';
+import { WhaleAlert } from '../types/WhaleTypes';
 
 
 // 🎯 ИНТЕРФЕЙСЫ ДЛЯ ВСЕХ ТИПОВ АЛЕРТОВ
@@ -95,6 +96,7 @@ interface StatsData {
   aggregationStats: any;
   loaderStats: any;
   notificationStats: any;
+  whaleStats?: any; // 🆕 ДОБАВЛЕНЫ СТАТИСТИКИ КИТОВ
   webhookMode: 'polling' | 'webhook';
   uptime: number;
 }
@@ -142,6 +144,21 @@ interface DiscoveryData {
   smartMoneyFound: number;
 }
 
+// 🆕 WHALE STATS INTERFACE
+interface WhaleStatsData {
+  totalScans: number;
+  totalWhalesFound: number;
+  validWhales: number;
+  spamFiltered: number;
+  notificationsSent: number;
+  avgScanDuration: number;
+  successRate: number;
+  sourceStats: {
+    dexScreener: { scans: number; candidates: number; validWhales: number; };
+    jupiter: { scans: number; candidates: number; validWhales: number; };
+  };
+}
+
 export class TelegramNotifier {
   private bot: TelegramBot;
   private userId: string;
@@ -152,6 +169,7 @@ export class TelegramNotifier {
     positionAlerts: 0,
     insiderAlerts: 0,
     smartMoneySwaps: 0,
+    whaleAlerts: 0, // 🆕 ДОБАВЛЕНО
     multiProviderReports: 0,
     commandsProcessed: 0,
     errorsSent: 0,
@@ -209,7 +227,134 @@ export class TelegramNotifier {
     this.logger.info(`🤖 Registered ${Object.keys(handlers).length} command handlers`);
   }
 
-  // 🆕 МЕТОДЫ ДЛЯ ОТВЕТОВ НА КОМАНДЫ
+  // 🆕 WHALE ALERT METHODS - ГЛАВНАЯ НОВАЯ ФУНКЦИЯ!
+  async sendWhaleAlert(whale: WhaleAlert): Promise<void> {
+    try {
+      const walletShort = this.truncateAddress(whale.walletAddress);
+      const ageText = this.formatTransactionAge(whale.timestamp);
+      const riskEmoji = whale.validationScore >= 80 ? '✅' : whale.validationScore >= 60 ? '⚠️' : '🚨';
+      
+      // 🔥 ОПРЕДЕЛЯЕМ КАТЕГОРИЮ КИТА
+      let whaleEmoji = '🐋';
+      let categoryText = 'WHALE';
+      
+      if (whale.amountUSD >= 50_000_000) {
+        whaleEmoji = '🐋👑';
+        categoryText = 'ULTRA WHALE';
+      } else if (whale.amountUSD >= 10_000_000) {
+        whaleEmoji = '🐋💎';
+        categoryText = 'MEGA WHALE';
+      }
+
+      let message = `${whaleEmoji}💎 <b>${categoryText} ALERT</b> 💎${whaleEmoji}\n\n`;
+      message += `💰 <b>Amount:</b> <code>$${this.formatNumber(whale.amountUSD)}</code> ${whale.swapType.toUpperCase()}\n`;
+      message += `🪙 <b>Token:</b> <code>#${whale.tokenSymbol}</code>\n`;
+      message += `📍 <b>Token Address:</b> <code>${whale.tokenAddress}</code>\n`; // 🔧 ИСПРАВЛЕНО: ПОЛНЫЙ АДРЕС ТОКЕНА
+      message += `👤 <b>Wallet:</b> <code>${walletShort}</code>\n`;
+      message += `⏰ <b>Age:</b> <code>${ageText}</code>\n`;
+      message += `🏦 <b>DEX:</b> <code>${whale.dex}</code>\n`;
+      message += `📊 <b>Source:</b> <code>${whale.source}</code>\n\n`;
+
+      message += `🔍 <b>Validation</b> ${riskEmoji}\n`;
+      message += `• <b>Score:</b> <code>${whale.validationScore}/100</code>\n`;
+      if (whale.riskFlags.length > 0) {
+        message += `• <b>Risk Flags:</b> <code>${whale.riskFlags.join(', ')}</code>\n`;
+      }
+
+      message += `\n<a href="https://solscan.io/tx/${whale.signature}">TXN</a> | `;
+      message += `<a href="https://solscan.io/account/${whale.walletAddress}">Wallet</a> | `;
+      message += `<a href="https://solscan.io/token/${whale.tokenAddress}">Token</a> | `;
+      message += `<a href="https://dexscreener.com/solana/${whale.tokenAddress}">DS</a>\n\n`;
+
+      message += `<code>#WhaleAlert #${whale.swapType.toUpperCase()}${whale.amountUSD >= 10_000_000 ? ' #MegaWhale' : ''}</code>`;
+
+      await this.sendMessage(message);
+      this.stats.whaleAlerts++;
+
+      this.logger.info(`🐋 Whale alert sent: ${whale.tokenSymbol} - $${whale.amountUSD.toFixed(0)} (${whale.source})`);
+
+    } catch (error) {
+      this.logger.error('Error sending whale alert:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  // 🆕 WHALE SCAN SUMMARY
+  async sendWhaleScanSummary(result: {
+    totalFound: number;
+    validWhales: number;
+    spamFiltered: number;
+    processedSources: string[];
+    timeWindow: string;
+  }): Promise<void> {
+    try {
+      if (result.validWhales === 0) return; // Не отправляем пустые отчеты
+      
+      let message = `🐋 <b>Whale Scan Summary</b>\n\n`;
+      message += `📊 <b>Results:</b>\n`;
+      message += `• <b>Total found:</b> <code>${result.totalFound}</code>\n`;
+      message += `• <b>Valid whales:</b> <code>${result.validWhales}</code>\n`;
+      message += `• <b>Spam filtered:</b> <code>${result.spamFiltered}</code>\n`;
+      message += `• <b>Sources:</b> <code>${result.processedSources.join(', ')}</code>\n`;
+      message += `• <b>Time window:</b> <code>${result.timeWindow}</code>\n\n`;
+      
+      const successRate = result.totalFound > 0 ? ((result.validWhales / result.totalFound) * 100).toFixed(1) : '0';
+      message += `📈 <b>Success Rate:</b> <code>${successRate}%</code>\n\n`;
+      
+      message += `<code>#WhaleScanSummary #WhaleHunting</code>`;
+
+      await this.sendMessage(message);
+      this.stats.whaleAlerts++;
+
+    } catch (error) {
+      this.logger.error('Error sending whale scan summary:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  // 🆕 WHALE STATS RESPONSE
+  async sendWhaleStatsResponse(stats: WhaleStatsData): Promise<void> {
+    try {
+      let message = `🐋 <b>Whale Detection Statistics</b>\n\n`;
+      
+      message += `📊 <b>Overall Performance:</b>\n`;
+      message += `🔍 <b>Total Scans:</b> <code>${stats.totalScans}</code>\n`;
+      message += `🐋 <b>Whales Found:</b> <code>${stats.totalWhalesFound}</code>\n`;
+      message += `✅ <b>Valid Whales:</b> <code>${stats.validWhales}</code>\n`;
+      message += `🚫 <b>Spam Filtered:</b> <code>${stats.spamFiltered}</code>\n`;
+      message += `📢 <b>Notifications Sent:</b> <code>${stats.notificationsSent}</code>\n`;
+      message += `📈 <b>Success Rate:</b> <code>${stats.successRate.toFixed(1)}%</code>\n`;
+      message += `⏱️ <b>Avg Scan Time:</b> <code>${stats.avgScanDuration.toFixed(0)}ms</code>\n\n`;
+      
+      message += `📡 <b>Source Performance:</b>\n`;
+      message += `🌐 <b>DexScreener:</b>\n`;
+      message += `  • Scans: <code>${stats.sourceStats.dexScreener.scans}</code>\n`;
+      message += `  • Candidates: <code>${stats.sourceStats.dexScreener.candidates}</code>\n`;
+      message += `  • Valid: <code>${stats.sourceStats.dexScreener.validWhales}</code>\n\n`;
+      
+      message += `🪐 <b>Jupiter:</b>\n`;
+      message += `  • Scans: <code>${stats.sourceStats.jupiter.scans}</code>\n`;
+      message += `  • Candidates: <code>${stats.sourceStats.jupiter.candidates}</code>\n`;
+      message += `  • Valid: <code>${stats.sourceStats.jupiter.validWhales}</code>\n\n`;
+      
+      message += `🎯 <b>Detection Criteria:</b>\n`;
+      message += `• Min Amount: <code>$2,000,000+</code>\n`;
+      message += `• Max Age: <code>10 minutes</code>\n`;
+      message += `• Validation: <code>Multi-level filtering</code>\n`;
+      message += `• Sources: <code>DexScreener + Jupiter</code>\n\n`;
+      
+      message += `<code>#WhaleStats #Detection #Performance</code>`;
+
+      await this.sendMessage(message);
+      this.logger.info('🐋 Whale stats response sent');
+
+    } catch (error) {
+      this.logger.error('Error sending whale stats response:', error);
+      this.stats.errorsSent++;
+    }
+  }
+
+  // 🆕 МЕТОДЫ ДЛЯ ОТВЕТОВ НА КОМАНДЫ С ОБНОВЛЕННОЙ СТАТИСТИКОЙ
 
   async sendStatsResponse(data: StatsData): Promise<void> {
     try {
@@ -230,6 +375,16 @@ export class TelegramNotifier {
       message += `💡 Hunters: <code>${data.walletStats?.byCategory?.hunter || 0}</code>\n`;
       message += `🐳 Traders: <code>${data.walletStats?.byCategory?.trader || 0}</code>\n\n`;
       
+      // 🆕 WHALE STATISTICS SECTION
+      if (data.whaleStats) {
+        message += `🐋 <b>Whale Detection:</b>\n`;
+        message += `🔍 Total Scans: <code>${data.whaleStats.totalScans || 0}</code>\n`;
+        message += `🐋 Whales Found: <code>${data.whaleStats.totalWhalesFound || 0}</code>\n`;
+        message += `✅ Valid Whales: <code>${data.whaleStats.validWhales || 0}</code>\n`;
+        message += `📢 Alerts Sent: <code>${data.whaleStats.notificationsSent || 0}</code>\n`;
+        message += `📈 Success Rate: <code>${(data.whaleStats.successRate || 0).toFixed(1)}%</code>\n\n`;
+      }
+      
       message += `📊 <b>Database:</b>\n`;
       message += `💱 Total Swaps: <code>${data.dbStats?.totalSwaps || 0}</code>\n`;
       message += `🎯 Positions: <code>${data.dbStats?.positionAggregations || 0}</code>\n`;
@@ -238,16 +393,18 @@ export class TelegramNotifier {
       message += `🤖 <b>Notifications:</b>\n`;
       message += `📤 Total Sent: <code>${data.notificationStats?.totalSent || 0}</code>\n`;
       message += `🎯 Position Alerts: <code>${data.notificationStats?.positionAlerts || 0}</code>\n`;
+      message += `🐋 Whale Alerts: <code>${this.stats.whaleAlerts}</code>\n`; // 🆕 ДОБАВЛЕНО
       message += `🚀 Smart Swaps: <code>${data.notificationStats?.smartMoneySwaps || 0}</code>\n`;
       message += `⚙️ Commands: <code>${this.stats.commandsProcessed}</code>\n`;
       message += `❌ Errors: <code>${data.notificationStats?.errorsSent || 0}</code>\n\n`;
       
       message += `📈 <b>Performance:</b>\n`;
       message += `🎯 Position Monitoring: <code>${data.aggregationStats?.activePositions || 0}</code> active\n`;
+      message += `🐋 Whale Scanning: <code>Every 5 minutes</code>\n`;
       message += `🔍 Discovery: Every 48 hours\n`;
       message += `🔄 Flow Analysis: Every 4 hours\n\n`;
       
-      message += `<code>#BotStats #SystemStatus</code>`;
+      message += `<code>#BotStats #SystemStatus #WhaleHunting</code>`;
 
       await this.sendMessage(message);
       this.logger.info('📊 Stats response sent');
@@ -306,15 +463,18 @@ export class TelegramNotifier {
       message += `🔄 <b>Monitoring:</b>\n`;
       message += `• Mode: <code>${settings.monitoringMode}</code>\n`;
       message += `• Wallets: <code>${settings.pollingWallets}/20</code> active\n`;
-      message += `• Min Trade: <code>${settings.minTradeAmount}</code>\n\n`;
+      message += `• Min Trade: <code>${settings.minTradeAmount}</code>\n`;
+      message += `• Whale Detection: <code>$2M+ threshold</code>\n\n`; // 🆕 ДОБАВЛЕНО
       
       message += `🕒 <b>Intervals:</b>\n`;
       message += `• Flow Analysis: <code>${settings.flowAnalysisInterval}</code>\n`;
       message += `• Wallet Discovery: <code>${settings.discoveryInterval}</code>\n`;
+      message += `• Whale Scanning: <code>5 minutes</code>\n`; // 🆕 ДОБАВЛЕНО
       message += `• Position Reports: <code>12 hours</code>\n\n`;
       
       message += `🎯 <b>Features:</b>\n`;
       message += `• Position Aggregation: <code>${settings.positionAggregation}</code>\n`;
+      message += `• Whale Detection: <code>Enabled (DexScreener + Jupiter)</code>\n`; // 🆕 ДОБАВЛЕНО
       message += `• Wallet Discovery: <code>${settings.walletDiscoveryEnabled ? 'Enabled' : 'Disabled'}</code>\n`;
       message += `• Family Detection: <code>${settings.familyDetection}</code>\n`;
       message += `• API Optimization: <code>${settings.apiOptimization}</code>\n\n`;
@@ -323,13 +483,19 @@ export class TelegramNotifier {
       message += `• Token Cache: <code>${settings.cacheSettings.tokenCache}</code>\n`;
       message += `• Price Cache: <code>${settings.cacheSettings.priceCache}</code>\n\n`;
       
+      message += `🐋 <b>Whale Detection:</b>\n`;
+      message += `• Min Amount: <code>$2,000,000+</code>\n`;
+      message += `• Max Age: <code>10 minutes</code>\n`;
+      message += `• Sources: <code>DexScreener + Jupiter</code>\n`;
+      message += `• Validation: <code>Multi-level filtering</code>\n\n`;
+      
       message += `🎯 <b>Position Aggregation:</b>\n`;
       message += `• Min Amount: <code>$10,000+ total</code>\n`;
       message += `• Min Purchases: <code>3+ similar sizes</code>\n`;
       message += `• Time Window: <code>90 minutes</code>\n`;
       message += `• Size Tolerance: <code>2%</code>\n\n`;
       
-      message += `<code>#BotSettings #Configuration</code>`;
+      message += `<code>#BotSettings #Configuration #WhaleHunting</code>`;
 
       await this.sendMessage(message);
       this.logger.info('⚙️ Settings response sent');
@@ -360,6 +526,7 @@ export class TelegramNotifier {
         message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${token.tokenSymbol}</code> ${changeEmoji}\n`;
         message += `    Vol: <code>$${this.formatNumber(token.volume24h)}</code> | Swaps: <code>${token.swapCount}</code>\n`;
         message += `    Wallets: <code>${token.uniqueWallets}</code> | Change: <code>${changeText}${token.priceChange24h.toFixed(1)}%</code>\n`;
+        message += `    <code>${token.tokenAddress}</code>\n`; // 🔧 ИСПРАВЛЕНО: ПОЛНЫЙ АДРЕС ТОКЕНА
         message += `    <a href="https://solscan.io/token/${token.tokenAddress}">SolS</a> | <a href="https://dexscreener.com/solana/${token.tokenAddress}">DS</a>\n\n`;
       });
       
@@ -475,7 +642,8 @@ export class TelegramNotifier {
       message += `/stats - Bot & wallet statistics\n`;
       message += `/wallets - Active Smart Money wallets\n`;
       message += `/settings - Current monitoring settings\n`;
-      message += `/positions - Position aggregation status\n\n`;
+      message += `/positions - Position aggregation status\n`;
+      message += `/whales - Whale detection statistics\n\n`; // 🆕 ДОБАВЛЕНО
       
       message += `📈 <b>Analysis Commands:</b>\n`;
       message += `/top - Top tokens by volume (24h)\n`;
@@ -486,6 +654,7 @@ export class TelegramNotifier {
       
       message += `🔥 <b>Key Features:</b>\n`;
       message += `• Real-time Smart Money monitoring\n`;
+      message += `• Whale transaction detection ($2M+)\n`; // 🆕 ДОБАВЛЕНО
       message += `• Position splitting detection\n`;
       message += `• Automatic wallet discovery (48h)\n`;
       message += `• Flow analysis every 4 hours\n`;
@@ -493,13 +662,14 @@ export class TelegramNotifier {
       
       message += `🎯 <b>Current Settings:</b>\n`;
       message += `• Min Trade Alert: $8,000+\n`;
+      message += `• Whale Alert: $2,000,000+\n`; // 🆕 ДОБАВЛЕНО
       message += `• Position Detection: $10,000+\n`;
       message += `• Monitoring: 20 top wallets\n`;
       message += `• Discovery: Every 48 hours\n\n`;
       
       message += `📝 <b>Note:</b> All commands work only for authorized users.\n\n`;
       
-      message += `<code>#Help #BotCommands #SmartMoney</code>`;
+      message += `<code>#Help #BotCommands #SmartMoney #WhaleHunting</code>`;
 
       await this.sendMessage(message);
       this.logger.info('❓ Help response sent');
@@ -540,6 +710,7 @@ export class TelegramNotifier {
 
 💰 <b>Total:</b> <code>$${this.formatNumber(alert.totalUSD)}</code> in <code>${alert.purchaseCount}</code> purchases
 🪙 <b>Token:</b> <code>#${alert.tokenSymbol}</code>
+📍 <b>Token Address:</b> <code>${alert.tokenAddress}</code>
 👤 <b>Wallet:</b> <code>${walletShort}</code>
 ⏱️ <b>Time span:</b> <code>${timeSpanText}</code>
 🎯 <b>Risk Level:</b> ${riskEmoji} <code>${riskLevel}</code>
@@ -609,6 +780,7 @@ export class TelegramNotifier {
       let message = `🚀💎 <b>MOONSHOT TOKEN DETECTED</b> 💎🚀
 
 🪙 <b>Token:</b> <code>#${moonshot.tokenSymbol}</code>
+📍 <b>Token Address:</b> <code>${moonshot.tokenAddress}</code>
 📈 <b>Multiplier:</b> <code>x${moonshot.multiplier.toFixed(0)}</code>
 💰 <b>Current Price:</b> <code>$${moonshot.currentPrice.toFixed(8)}</code>
 🕒 <b>Age:</b> <code>${ageText}</code>
@@ -879,10 +1051,12 @@ export class TelegramNotifier {
 
       flows.slice(0, 8).forEach((flow, index) => {
         const amount = type === 'inflow' ? flow.totalInflowUSD : flow.totalOutflowUSD;
-        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${flow.tokenSymbol} (${this.truncateAddress(flow.tokenAddress)})</code> <b>$${this.formatNumber(amount)}</b> <code>(${flow.uniqueWallets} wallets)</code>\n`;
+        message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${flow.tokenSymbol}</code>\n`;
+        message += `<code>${flow.tokenAddress}</code>\n`; // 🔧 ИСПРАВЛЕНО: ПОЛНЫЙ АДРЕС ТОКЕНА
+        message += `<b>$${this.formatNumber(amount)}</b> <code>(${flow.uniqueWallets} wallets)</code>\n\n`;
       });
 
-      message += `\n<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
+      message += `<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
 
       await this.sendMessage(message);
       this.logger.info(`Smart Money ${typeText} ${period} summary sent: ${flows.length} tokens`);
@@ -902,9 +1076,10 @@ export class TelegramNotifier {
           : `${Math.round(token.ageHours)}h`;
 
         message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${token.symbol}</code> <b>${token.uniqueSmWallets} wallets</b> <code>$${this.formatNumber(token.smStakeUSD)}</code> <code>${ageText}</code>\n`;
+        message += `<code>${token.address}</code>\n\n`; // 🔧 ИСПРАВЛЕНО: ПОЛНЫЙ АДРЕС ТОКЕНА
       });
 
-      message += `\n<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
+      message += `<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
 
       await this.sendMessage(message);
       this.logger.info(`Hot New Tokens by Wallets sent: ${tokens.length} tokens`);
@@ -926,9 +1101,10 @@ export class TelegramNotifier {
           : `${Math.round(token.ageHours)}h`;
 
         message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${token.symbol}</code> <code>${ageText}</code> <b>$${this.formatNumber(token.smStakeUSD)}</b> <code>${token.uniqueSmWallets}w</code>\n`;
+        message += `<code>${token.address}</code>\n\n`; // 🔧 ИСПРАВЛЕНО: ПОЛНЫЙ АДРЕС ТОКЕНА
       });
 
-      message += `\n<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
+      message += `<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
 
       await this.sendMessage(message);
       this.logger.info(`Hot New Tokens by Age sent: ${tokens.length} tokens`);
@@ -950,9 +1126,10 @@ export class TelegramNotifier {
           : `${Math.round(token.ageHours)}h`;
 
         message += `<code>${(index + 1).toString().padStart(2, '0')}.</code> <code>#${token.symbol}</code> <b>$${this.formatNumber(token.fdv)}</b> <code>$${this.formatNumber(token.smStakeUSD)}</code> <code>${ageText}</code>\n`;
+        message += `<code>${token.address}</code>\n\n`; // 🔧 ИСПРАВЛЕНО: ПОЛНЫЙ АДРЕС ТОКЕНА
       });
 
-      message += `\n<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
+      message += `<a href="https://solscan.io">SolS</a> <a href="https://dexscreener.com/solana">DS</a>`;
 
       await this.sendMessage(message);
       this.logger.info(`Hot New Tokens by FDV sent: ${tokens.length} tokens`);
@@ -1003,6 +1180,7 @@ export class TelegramNotifier {
 
 💰 <b>Spent:</b> <code>$${this.formatNumber(amountUSD)}</code>
 🪙 <b>Token:</b> <code>#${alert.tokenSymbol}</code>
+📍 <b>Token Address:</b> <code>${alert.tokenAddress}</code>
 📊 <b>Price:</b> <code>$${price.toFixed(8)}</code>
 👤 <b>Wallet:</b> <code>${walletShort}</code>
 ⚡ <b>Signal Strength:</b> <code>${alert.signalStrength || 0}/10</code>
@@ -1034,6 +1212,7 @@ export class TelegramNotifier {
       
       let breakdown = `📊 <b>Detailed Purchase Breakdown</b>\n\n`;
       breakdown += `🎯 <b>Token:</b> <code>#${alert.tokenSymbol}</code>\n`;
+      breakdown += `📍 <b>Token Address:</b> <code>${alert.tokenAddress}</code>\n`; // 🔧 ИСПРАВЛЕНО: ПОЛНЫЙ АДРЕС
       breakdown += `👤 <b>Wallet:</b> <code>${this.truncateAddress(alert.walletAddress)}</code>\n\n`;
 
       sortedPurchases.forEach((purchase, index) => {
@@ -1056,6 +1235,21 @@ export class TelegramNotifier {
     } catch (error) {
       this.logger.error('Error sending detailed purchase breakdown:', error);
       this.stats.errorsSent++;
+    }
+  }
+
+  // 🆕 НОВЫЙ МЕТОД: Форматирование возраста транзакции
+  private formatTransactionAge(timestamp: Date): string {
+    const ageMs = Date.now() - timestamp.getTime();
+    const ageMinutes = Math.floor(ageMs / (1000 * 60));
+    
+    if (ageMinutes < 1) {
+      return 'Just now';
+    } else if (ageMinutes < 60) {
+      return `${ageMinutes}m ago`;
+    } else {
+      const ageHours = Math.floor(ageMinutes / 60);
+      return `${ageHours}h ${ageMinutes % 60}m ago`;
     }
   }
 
