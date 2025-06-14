@@ -1,4 +1,4 @@
-// src/types/index.ts - АККУРАТНО ДОБАВЛЕНЫ ТИПЫ ДЛЯ ВНЕШНЕГО ПОИСКА + ВСЕ СУЩЕСТВУЮЩИЕ ТИПЫ СОХРАНЕНЫ
+// src/types/index.ts - АККУРАТНО ДОБАВЛЕНЫ ТИПЫ ДЛЯ ВНЕШНЕГО ПОИСКА + ВСЕ СУЩЕСТВУЮЩИЕ ТИПЫ СОХРАНЕНЫ + ИСПРАВЛЕНЫ ТИПЫ ДЛЯ MULTIPROVIDER
 
 // ===== СУЩЕСТВУЮЩИЕ ТИПЫ (БЕЗ ИЗМЕНЕНИЙ) =====
 
@@ -410,6 +410,115 @@ export interface CacheConfig {
   methodTTL: Record<string, number>;
 }
 
+// ===== 🆕 НЕДОСТАЮЩИЕ ТИПЫ ДЛЯ MULTIPROVIDER SERVICE =====
+
+// Конфигурация провайдера
+export interface ProviderConfig {
+  name: string;
+  type: 'quicknode' | 'alchemy' | 'helius' | 'genesysgo' | 'triton';
+  baseUrl: string;
+  apiKey: string;
+  
+  // Лимиты
+  requestsPerMinute: number;
+  requestsPerDay: number;
+  requestsPerMonth: number;
+  
+  // Приоритет и надежность
+  priority: number; // 1-5, где 5 = высший приоритет
+  reliability: number; // 0-100, статистическая надежность
+  
+  // Специализация
+  specialties: string[]; // ['rpc', 'enhanced', 'analytics', 'webhooks']
+  
+  // Временные ограничения
+  timeout: number; // миллисекунды
+  retryAttempts: number;
+  retryDelay: number;
+}
+
+// Ответ от API провайдера
+export interface APIResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  provider: string;
+  responseTime: number;
+  retryCount: number;
+  fromCache?: boolean;
+  rateLimitRemaining?: number;
+  rateLimitReset?: number;
+}
+
+// 🔧 ИСПРАВЛЕННАЯ статистика провайдера (совместимая с MultiProviderService)
+export interface ProviderStats {
+  name: string;
+  type: string;
+  requestCount: number;
+  errorCount: number;
+  successRate: number;
+  avgResponseTime: number;
+  isHealthy: boolean;
+  priority: number;
+  
+  // Лимиты
+  currentMinuteRequests: number;
+  currentDayRequests: number;
+  currentMonthRequests: number;
+  minuteUsage: number; // процент
+  dayUsage: number; // процент (было dayUsage в ошибках - исправлено на dailyUsage)
+  monthUsage: number; // процент
+  
+  // Ошибки
+  lastError?: string;
+  lastErrorTime?: Date;
+  consecutiveErrors: number;
+  
+  // Производительность
+  minResponseTime: number;
+  maxResponseTime: number;
+  responseTimeHistory: number[]; // последние 100 запросов
+  
+  // Совместимость со старым интерфейсом
+  dailyUsage: number;
+  hourlyUsage: number;
+  totalUsage: number;
+  lastReset: Date;
+  isAvailable: boolean;
+}
+
+// Результат балансировки нагрузки
+export interface LoadBalancingResult {
+  provider: ProviderConfig;
+  fallbackUsed: boolean;
+  totalProviders: number;
+  healthyProviders: number;
+  responseTime: number;
+  retries: number;
+}
+
+// Конфигурация retry логики
+export interface RetryConfig {
+  maxAttempts: number;
+  baseDelay: number; // миллисекунды
+  maxDelay: number; // миллисекунды
+  backoffMultiplier: number; // экспоненциальная задержка
+  retryOnErrors: string[]; // коды ошибок для retry
+  retryOnTimeout: boolean;
+  retryOnRateLimit: boolean;
+}
+
+// Health check результат
+export interface HealthCheckResult {
+  provider: string;
+  isHealthy: boolean;
+  responseTime: number;
+  error?: string;
+  timestamp: Date;
+  consecutiveFailures: number;
+  lastSuccessTime?: Date;
+}
+
 // Метрики MultiProvider системы
 export interface MultiProviderMetrics {
   totalRequests: number;
@@ -551,15 +660,6 @@ export interface ApiCreditUsage {
   credits: number;
   timestamp: Date;
   success: boolean;
-}
-
-export interface ProviderStats {
-  dailyUsage: number;
-  hourlyUsage: number;
-  totalUsage: number;
-  lastReset: Date;
-  isAvailable: boolean;
-  errorCount: number;
 }
 
 export interface CreditManagerStats {

@@ -236,7 +236,18 @@ export class MultiProviderService {
       consecutiveErrors: 0,
       minResponseTime: Infinity,
       maxResponseTime: 0,
-      responseTimeHistory: []
+      responseTimeHistory: [],
+      
+      // 🔧 НЕДОСТАЮЩИЕ ПОЛЯ для совместимости со старым интерфейсом
+      dailyUsage: 0,
+      hourlyUsage: 0, 
+      totalUsage: 0,
+      lastReset: new Date(),
+      isAvailable: true,
+      
+      // 🔧 ОПЦИОНАЛЬНЫЕ ПОЛЯ ДЛЯ ОШИБОК
+      lastError: undefined,
+      lastErrorTime: undefined
     });
     
     this.metrics.totalProviders++;
@@ -684,6 +695,11 @@ export class MultiProviderService {
       stats.minuteUsage = (stats.currentMinuteRequests / provider.requestsPerMinute) * 100;
       stats.dayUsage = (stats.currentDayRequests / provider.requestsPerDay) * 100;
       stats.monthUsage = (stats.currentMonthRequests / provider.requestsPerMonth) * 100;
+      
+      // 🔧 ОБНОВЛЯЕМ ДОПОЛНИТЕЛЬНЫЕ ПОЛЯ
+      stats.dailyUsage = stats.dayUsage;
+      stats.hourlyUsage = stats.minuteUsage * 60; // Приблизительно
+      stats.totalUsage = (stats.dayUsage + stats.monthUsage) / 2;
     }
 
     // Обновляем распределение нагрузки
