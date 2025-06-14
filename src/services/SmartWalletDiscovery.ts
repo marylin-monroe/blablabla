@@ -1,4 +1,4 @@
-// src/services/SmartWalletDiscovery.ts - АККУРАТНО ДОБАВЛЕН ВНЕШНИЙ ПОИСК
+// src/services/SmartWalletDiscovery.ts - АККУРАТНО ДОБАВЛЕН ВНЕШНИЙ ПОИСК (БЕЗ ОБЯЗАТЕЛЬНОГО HELIUS)
 import { SmartMoneyDatabase } from './SmartMoneyDatabase';
 import { Database } from './Database';
 import { Logger } from '../utils/Logger';
@@ -12,7 +12,7 @@ export class SmartWalletDiscovery {
   private smDatabase: SmartMoneyDatabase;
   private database: Database;
   private logger: Logger;
-  private heliusApiKey: string;
+  private heliusApiKey?: string; // 🔧 СДЕЛАНО ОПЦИОНАЛЬНЫМ
   
   // 🔧 ИСПРАВЛЕНО: Добавлено поле для отслеживания процесса поиска
   private isDiscoveryInProgress = false;
@@ -26,14 +26,22 @@ export class SmartWalletDiscovery {
     this.smDatabase = smDatabase;
     this.database = database;
     this.logger = Logger.getInstance();
-    this.heliusApiKey = process.env.HELIUS_API_KEY!;
+    this.heliusApiKey = process.env.HELIUS_API_KEY;
     
-    // 🆕 ИНИЦИАЛИЗАЦИЯ внешнего поиска (опционально)
+    // 🔧 ИСПРАВЛЕНО: Инициализация внешнего поиска БЕЗ обязательного Helius
     try {
       this.creditManager = new ApiCreditManager();
       this.externalScanner = new ExternalWalletScanner(this.database, this.creditManager);
+      
+      // Проверяем возможности сканера
+      const capabilities = this.externalScanner.getCapabilities();
       this.useExternalSearch = true;
-      this.logger.info('🌍 External wallet discovery ENABLED (DexScreener + Jupiter)');
+      
+      if (capabilities.fullPipeline) {
+        this.logger.info('🌍 External wallet discovery ENABLED (DexScreener + Jupiter + Helius)');
+      } else {
+        this.logger.info('🌍 External wallet discovery ENABLED (DexScreener + Jupiter only - no Helius)');
+      }
     } catch (error) {
       this.logger.warn('⚠️ External wallet discovery disabled:', error);
       this.useExternalSearch = false;
@@ -99,15 +107,20 @@ export class SmartWalletDiscovery {
         try {
           const externalCandidates = await this.externalScanner.findWalletCandidates();
           
-          // Фильтруем уже известные кошельки
-          const newCandidates = await this.filterExistingWallets(externalCandidates);
-          
-          this.logger.info(`📊 External search: ${externalCandidates.length} found, ${newCandidates.length} new`);
-          candidates.push(...newCandidates);
-          
-          // Если нашли достаточно внешних кандидатов, используем их
-          if (candidates.length >= 20) {
-            return candidates.slice(0, 50); // Берем топ 50 для анализа
+          // 🔧 ИСПРАВЛЕНО: Если внешний поиск вернул токены, используем их для внутреннего анализа
+          if (externalCandidates.length > 0) {
+            // Фильтруем уже известные кошельки
+            const newCandidates = await this.filterExistingWallets(externalCandidates);
+            
+            this.logger.info(`📊 External search: ${externalCandidates.length} found, ${newCandidates.length} new`);
+            candidates.push(...newCandidates);
+            
+            // Если нашли достаточно внешних кандидатов, используем их
+            if (candidates.length >= 20) {
+              return candidates.slice(0, 50); // Берем топ 50 для анализа
+            }
+          } else {
+            this.logger.info('📊 External search returned no candidates, using internal search');
           }
           
         } catch (externalError) {
@@ -571,9 +584,17 @@ export class SmartWalletDiscovery {
 
   // 🆕 НОВЫЕ МЕТОДЫ для статистики
   public getDiscoveryStats(): any {
+    const externalCapabilities = this.externalScanner?.getCapabilities() || {
+      externalTokens: false,
+      walletHolders: false,
+      activityFilter: false,
+      fullPipeline: false
+    };
+
     return {
       isRunning: this.isDiscoveryInProgress,
       externalSearchEnabled: this.useExternalSearch,
+      externalCapabilities,
       creditStats: this.creditManager?.getUsageStats() || null,
       externalScannerStats: this.externalScanner?.getStats() || null
     };

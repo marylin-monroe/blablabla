@@ -31,7 +31,8 @@ export class ExternalWalletScanner {
   private creditManager: ApiCreditManager;
   private database: Database;
   private logger: Logger;
-  private heliusApiKey: string;
+  private heliusApiKey?: string; // 🔧 СДЕЛАНО ОПЦИОНАЛЬНЫМ
+  private hasHelius: boolean = false; // 🆕 ФЛАГ ДОСТУПНОСТИ HELIUS
   
   constructor(database: Database, creditManager: ApiCreditManager) {
     this.dexScreener = new DexScreenerService();
@@ -39,16 +40,21 @@ export class ExternalWalletScanner {
     this.creditManager = creditManager;
     this.database = database;
     this.logger = Logger.getInstance();
-    this.heliusApiKey = process.env.HELIUS_API_KEY!;
+    this.heliusApiKey = process.env.HELIUS_API_KEY;
     
-    if (!this.heliusApiKey) {
-      throw new Error('HELIUS_API_KEY is required for external wallet scanning');
+    // 🔧 ИСПРАВЛЕНО: Helius теперь опциональный
+    if (this.heliusApiKey) {
+      this.hasHelius = true;
+      this.logger.info('🌍 External wallet scanner initialized WITH Helius support');
+    } else {
+      this.hasHelius = false;
+      this.logger.warn('⚠️ External wallet scanner initialized WITHOUT Helius (DexScreener + Jupiter only)');
     }
   }
 
   /**
    * Главный метод для поиска кандидатов кошельков
-   * Использует внешние API для получения свежих данных
+   * Теперь работает БЕЗ Helius - только внешние API
    */
   async findWalletCandidates(): Promise<string[]> {
     try {
@@ -63,11 +69,17 @@ export class ExternalWalletScanner {
         return [];
       }
       
-      // Stage 2: Получение кошельков-держателей токенов (дешевые RPC вызовы)
+      // 🔧 ИСПРАВЛЕНО: Без Helius просто возвращаем токены для внутреннего анализа
+      if (!this.hasHelius) {
+        this.logger.info('📊 No Helius - returning token addresses for internal blockchain analysis');
+        return tokenCandidates.slice(0, 50).map(t => t.address);
+      }
+
+      // Stage 2: Получение кошельков-держателей токенов (только если есть Helius)
       const walletCandidates = await this.getTokenHolders(tokenCandidates);
       this.logger.info(`👥 Found ${walletCandidates.length} wallet candidates from token analysis`);
       
-      // Stage 3: Быстрая предварительная фильтрация (1-2 RPC на кошелек)
+      // Stage 3: Быстрая предварительная фильтрация
       const activeWallets = await this.quickActivityFilter(walletCandidates);
       this.logger.info(`✅ Filtered to ${activeWallets.length} active wallets`);
       
@@ -130,9 +142,14 @@ export class ExternalWalletScanner {
   }
 
   /**
-   * Stage 2: Получает держателей токенов через Helius API
+   * Stage 2: Получает держателей токенов через Helius API (только если доступен)
    */
   private async getTokenHolders(tokenCandidates: TokenCandidate[]): Promise<WalletCandidate[]> {
+    if (!this.hasHelius) {
+      this.logger.info('📊 Skipping token holders analysis - no Helius API');
+      return [];
+    }
+
     const walletCandidates = new Map<string, WalletCandidate>();
     
     for (const token of tokenCandidates.slice(0, 50)) { // Ограничиваем для экономии
@@ -178,9 +195,14 @@ export class ExternalWalletScanner {
   }
 
   /**
-   * Stage 3: Быстрая фильтрация активности (1-2 RPC на кошелек)
+   * Stage 3: Быстрая фильтрация активности (только если есть Helius)
    */
   private async quickActivityFilter(candidates: WalletCandidate[]): Promise<WalletCandidate[]> {
+    if (!this.hasHelius || candidates.length === 0) {
+      this.logger.info('📊 Skipping activity filtering - no Helius API or no candidates');
+      return candidates;
+    }
+
     const activeWallets: WalletCandidate[] = [];
     
     for (const candidate of candidates) {
@@ -233,9 +255,13 @@ export class ExternalWalletScanner {
   }
 
   /**
-   * Получает топовых держателей токена через Helius
+   * Получает топовых держателей токена через Helius (только если доступен)
    */
   private async getTopTokenHolders(tokenAddress: string): Promise<Array<{ address: string; balance: number }>> {
+    if (!this.hasHelius || !this.heliusApiKey) {
+      return [];
+    }
+
     try {
       const response = await axios.post(
         `https://mainnet.helius-rpc.com/?api-key=${this.heliusApiKey}`,
@@ -273,9 +299,13 @@ export class ExternalWalletScanner {
   }
 
   /**
-   * Быстрая проверка активности кошелька
+   * Быстрая проверка активности кошелька (только если есть Helius)
    */
   private async checkWalletActivity(walletAddress: string): Promise<{ lastActivity: Date; recentVolume: number } | null> {
+    if (!this.hasHelius || !this.heliusApiKey) {
+      return null;
+    }
+
     try {
       const response = await axios.post(
         `https://mainnet.helius-rpc.com/?api-key=${this.heliusApiKey}`,
@@ -335,11 +365,13 @@ export class ExternalWalletScanner {
    * Получает статистику работы сканера
    */
   getStats(): {
+    hasHelius: boolean;
     dexScreenerStats: any;
     jupiterStats: any;
     creditStats: any;
   } {
     return {
+      hasHelius: this.hasHelius,
       dexScreenerStats: this.dexScreener.getUsageStats(),
       jupiterStats: this.jupiter.getUsageStats(),
       creditStats: this.creditManager.getUsageStats()
@@ -350,6 +382,24 @@ export class ExternalWalletScanner {
    * Проверяет, готов ли сканер к работе
    */
   isReady(): boolean {
-    return !!(this.heliusApiKey && this.creditManager);
+    // Теперь готов всегда, Helius опциональный
+    return !!(this.creditManager);
+  }
+
+  /**
+   * 🆕 НОВЫЙ МЕТОД: Получает возможности сканера
+   */
+  getCapabilities(): {
+    externalTokens: boolean;
+    walletHolders: boolean;
+    activityFilter: boolean;
+    fullPipeline: boolean;
+  } {
+    return {
+      externalTokens: true, // DexScreener + Jupiter всегда доступны
+      walletHolders: this.hasHelius,
+      activityFilter: this.hasHelius,
+      fullPipeline: this.hasHelius
+    };
   }
 }
